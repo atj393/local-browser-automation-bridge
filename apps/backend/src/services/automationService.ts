@@ -167,6 +167,7 @@ async function postClaimed(item: PostQueueItem): Promise<PostNextResult> {
         operationId,
         result_status: resultStatus,
         autoSubmitted: !!writerResult.autoSubmitted,
+        submitMethod: writerResult.submitMethod,
       },
     );
 

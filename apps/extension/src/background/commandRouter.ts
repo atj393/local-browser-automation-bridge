@@ -110,11 +110,12 @@ export const commandRouter = {
     }
 
     console.log(
-      '[lbab/cmd] dispatching POST_TO_WRITER_CONTENT',
-      'operationId:',
-      operationId,
+      '[lbab/background] POST_TO_WRITER autoSubmit:',
+      !!payload.autoSubmit,
       'postId:',
       payload.postId,
+      'operationId:',
+      operationId,
       'tabId:',
       tab.tabId,
     );

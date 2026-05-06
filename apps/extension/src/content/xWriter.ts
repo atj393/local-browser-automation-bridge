@@ -12,6 +12,10 @@ import {
   insertIntoXDraftEditor,
   findXPostButton,
   isButtonEnabled,
+  waitForXPostButtonEnabled,
+  clickXPostButton,
+  submitXWithCtrlEnter,
+  waitForXSubmission,
 } from './inputUtils.js';
 import { sleep } from './waitUtils.js';
 
@@ -83,6 +87,7 @@ function init(): void {
       const operationId = String(payload.operationId ?? `post:${postId}:legacy`);
 
       console.log('[x-writer] operation received', { operationId, postId, autoSubmit });
+      console.log('[lbab/x-writer] received autoSubmit:', autoSubmit);
 
       if (completedOperations.has(operationId)) {
         console.warn('[x-writer] duplicate operation ignored (completed)', operationId);
@@ -168,6 +173,7 @@ async function handlePost(
   operationId: string;
   status?: 'filled' | 'submitted' | 'duplicate_ignored';
   autoSubmitted?: boolean;
+  submitMethod?: 'ctrl_enter' | 'meta_enter' | 'button_click' | 'none';
   duplicate?: boolean;
   url?: string;
   error?: string;
@@ -212,9 +218,13 @@ async function handlePost(
   if (onX) {
     const draftResult = await insertIntoXDraftEditor(composer, content);
 
-    // Defense-in-depth: re-check the post button using the latest DOM.
+    // First peek for the post button. autoSubmit:true uses
+    // waitForXPostButtonEnabled() further down so X has time to validate
+    // and enable the button.
     const xButton = findXPostButton();
     const buttonEnabled = isButtonEnabled(xButton);
+    const buttonSelectorUsed = xButton?.getAttribute('data-testid') ?? '(text fallback)';
+    console.log('[lbab/x-writer] post button selector used:', buttonSelectorUsed);
     console.log('[lbab/x-writer] post button found:', !!xButton);
     console.log('[lbab/x-writer] post button enabled:', buttonEnabled);
 
@@ -295,6 +305,7 @@ async function handlePost(
         operationId,
         status: 'filled',
         autoSubmitted: false,
+        submitMethod: 'none',
         url: window.location.href,
         ...({
           debug: {
@@ -306,36 +317,135 @@ async function handlePost(
       };
     }
 
-    // autoSubmit true on X — only click if button is actually enabled.
-    if (!xButton) {
+    // ------------------------------------------------------------------
+    // autoSubmit:true on X — Ctrl+Enter primary, button click fallback.
+    //
+    // Manual Ctrl+Enter is X's documented submit shortcut and is the most
+    // reliable way to commit a Draft.js post. The Inline Post button click
+    // sometimes does not register through React's synthetic event system,
+    // so we use it only as a fallback.
+    //
+    // Each strategy fires *exactly once* per operationId. If the first
+    // succeeds (confirmed), we never run the second.
+    // ------------------------------------------------------------------
+    console.log('[lbab/x-writer] autoSubmit true');
+
+    // Brief settle so X's validation finishes (button enable, length count).
+    await sleep(500);
+
+    let submitMethod: 'ctrl_enter' | 'button_click' | 'none' = 'none';
+    let submitConfirmed = false;
+    let submitElapsedMs = 0;
+    let submitReason: string | undefined;
+
+    // Strategy A — Ctrl+Enter (primary).
+    try {
+      await submitXWithCtrlEnter(composer, 'ctrl');
+      const result = await waitForXSubmission(composer, content, 5000);
+      if (result.ok) {
+        submitMethod = 'ctrl_enter';
+        submitConfirmed = true;
+        submitElapsedMs = result.elapsedMs;
+        submitReason = result.reason;
+        console.log('[lbab/x-writer] Ctrl+Enter submitted: true');
+        console.log(`[lbab/x-writer] submit confirmed after ${result.elapsedMs} ms`, {
+          reason: result.reason,
+        });
+      } else {
+        console.log('[lbab/x-writer] Ctrl+Enter submitted: false');
+      }
+    } catch (err) {
+      console.warn('[lbab/x-writer] Ctrl+Enter dispatch threw', err);
+    }
+
+    // Strategy B — button click (fallback).
+    if (!submitConfirmed) {
+      console.log(
+        '[lbab/x-writer] Ctrl+Enter did not confirm; trying button click fallback',
+      );
+      const enabledBtn = await waitForXPostButtonEnabled(3000);
+      if (!enabledBtn) {
+        return {
+          success: false,
+          postId,
+          operationId,
+          error:
+            'Auto-submit failed: Ctrl+Enter did not confirm and the X Post button is still disabled. Try the post manually.',
+          url: window.location.href,
+          ...({
+            debug: {
+              selector: selectorUsed,
+              postButtonSelector: buttonSelectorUsed,
+              postButtonFound: !!xButton,
+              postButtonEnabled: buttonEnabled,
+              attempted: ['ctrl_enter'],
+            },
+          } as Record<string, unknown>),
+        };
+      }
+      console.log('[lbab/x-writer] attempting button click submit');
+      try {
+        await clickXPostButton(enabledBtn);
+      } catch (err) {
+        return {
+          success: false,
+          postId,
+          operationId,
+          error: `Click dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+          url: window.location.href,
+        };
+      }
+      const result = await waitForXSubmission(composer, content, 2000);
+      if (result.ok) {
+        submitMethod = 'button_click';
+        submitConfirmed = true;
+        submitElapsedMs = result.elapsedMs;
+        submitReason = result.reason;
+        console.log('[lbab/x-writer] button click submitted: true');
+        console.log(`[lbab/x-writer] submit confirmed after ${result.elapsedMs} ms`, {
+          reason: result.reason,
+        });
+      } else {
+        console.log('[lbab/x-writer] button click submitted: false');
+      }
+    }
+
+    if (!submitConfirmed) {
       return {
         success: false,
         postId,
         operationId,
-        error: 'Could not find X post button.',
+        error:
+          'Auto-submit dispatched (Ctrl+Enter then button click) but submission could not be confirmed within 5 seconds.',
         url: window.location.href,
+        ...({
+          debug: {
+            selector: selectorUsed,
+            attempted: ['ctrl_enter', 'button_click'],
+            elapsedMs: submitElapsedMs,
+          },
+        } as Record<string, unknown>),
       };
     }
-    if (!buttonEnabled) {
-      return {
-        success: false,
-        postId,
-        operationId,
-        error: 'X Post button is still disabled after insertion; refusing to click.',
-        url: window.location.href,
-      };
-    }
-    console.log('[x-writer] clicking post button once', { operationId, postId });
-    xButton.click();
-    await sleep(450);
-    console.log('[x-writer] submit completed', { operationId, postId });
+
+    console.log('[x-writer] submit status returned: submitted');
     return {
       success: true,
       postId,
       operationId,
       status: 'submitted',
       autoSubmitted: true,
+      submitMethod,
       url: window.location.href,
+      ...({
+        debug: {
+          selector: selectorUsed,
+          submitMethod,
+          submitConfirmedReason: submitReason,
+          submitElapsedMs,
+          clicked: submitMethod === 'button_click',
+        },
+      } as Record<string, unknown>),
     };
   }
 
@@ -380,6 +490,7 @@ async function handlePost(
       operationId,
       status: 'filled',
       autoSubmitted: false,
+      submitMethod: 'none',
       url: window.location.href,
     };
   }
@@ -409,6 +520,7 @@ async function handlePost(
     operationId,
     status: 'submitted',
     autoSubmitted: true,
+    submitMethod: 'button_click',
     url: window.location.href,
   };
 }

@@ -175,6 +175,12 @@ class ExtensionGateway {
       TIMEOUTS.postToWriterMs,
       'Timed out waiting for writer tab to respond.',
     );
+    logService.info('[backend] POST_TO_WRITER dispatch', {
+      postId: payload.postId,
+      operationId: payload.operationId,
+      autoSubmitWriter: payload.autoSubmit,
+      requestId,
+    });
     this.send({ type: 'POST_TO_WRITER', requestId, payload });
     return promise;
   }

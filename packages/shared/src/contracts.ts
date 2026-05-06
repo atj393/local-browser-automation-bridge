@@ -57,12 +57,16 @@ export interface PostToWriterPayload {
   operationId: string;
 }
 
+export type WriterSubmitMethod = 'ctrl_enter' | 'meta_enter' | 'button_click' | 'none';
+
 export interface PostToWriterResultPayload {
   success: boolean;
   postId: number;
   operationId?: string;
   status?: 'filled' | 'submitted' | 'duplicate_ignored';
   autoSubmitted?: boolean;
+  /** Which submit strategy actually completed. 'none' when autoSubmit was off. */
+  submitMethod?: WriterSubmitMethod;
   duplicate?: boolean;
   url?: string;
   error?: string;

@@ -668,7 +668,211 @@ export function findXPostButton(): HTMLButtonElement | null {
 
 export function isButtonEnabled(button: HTMLButtonElement | null): boolean {
   if (!button) return false;
+  // Honest disabled signals only — we do NOT use tabindex/CSS classes/colors.
   if (button.disabled) return false;
+  if (button.hasAttribute('disabled')) return false;
   if (button.getAttribute('aria-disabled') === 'true') return false;
+  // Visibility check: X's Post button has non-zero box when it's actionable.
+  const rect = button.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return false;
   return true;
+}
+
+/**
+ * Poll for the X Post button to become enabled. After Draft.js inserts text,
+ * X's React parent runs validation (length, account state, etc.) and flips
+ * the button's disabled flag on a later tick. Polling avoids the false
+ * "still disabled" reading that we'd otherwise see if we checked too soon.
+ */
+export async function waitForXPostButtonEnabled(
+  timeoutMs = 3000,
+  pollMs = 100,
+): Promise<HTMLButtonElement | null> {
+  console.log('[lbab/x-writer] waiting for X post button to become enabled');
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const btn = findXPostButton();
+    if (btn && isButtonEnabled(btn)) {
+      console.log(`[lbab/x-writer] post button enabled after ${Date.now() - start} ms`);
+      return btn;
+    }
+    await sleep(pollMs);
+  }
+  console.warn('[lbab/x-writer] post button did not enable within timeout', { timeoutMs });
+  return null;
+}
+
+/**
+ * Dispatch a realistic Ctrl+Enter (or Meta+Enter) sequence on the X Draft.js
+ * editor. This is X's documented submit shortcut and is empirically the
+ * most reliable way to submit posts when the Inline Post button click does
+ * not register through React's synthetic event system.
+ *
+ * The sequence mirrors what the browser fires for a real user keypress:
+ *   1. keydown Control / Meta (alone)
+ *   2. keydown Enter with the modifier flag set
+ *   3. keyup   Enter with the modifier flag set
+ *   4. keyup   Control / Meta
+ *
+ * Does NOT spam — exactly one Enter keydown / keyup. Caller controls
+ * single-shot semantics via operationId guards.
+ */
+export async function submitXWithCtrlEnter(
+  editor: HTMLElement,
+  modifier: 'ctrl' | 'meta' = 'ctrl',
+): Promise<void> {
+  const useMeta = modifier === 'meta';
+  const modifierKey = useMeta ? 'Meta' : 'Control';
+  const modifierCode = useMeta ? 'MetaLeft' : 'ControlLeft';
+
+  console.log(`[lbab/x-writer] dispatching ${useMeta ? 'Meta' : 'Ctrl'}+Enter`);
+
+  // Make sure the editor is focused so document.activeElement is the
+  // Draft.js content node — Draft.js attaches its keydown handler to the
+  // editor and to the document via React's delegation.
+  try {
+    editor.focus();
+  } catch {
+    /* ignore */
+  }
+  // Place a caret at the end of the contents in case selection got lost
+  // (Draft.js needs a non-collapsed-elsewhere selection to commit submit).
+  try {
+    const sel = window.getSelection();
+    if (sel) {
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false); // caret at end
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  const baseInit = (key: string, code: string, modOn: boolean): KeyboardEventInit => ({
+    key,
+    code,
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    keyCode: key === 'Enter' ? 13 : useMeta ? 91 : 17,
+    which: key === 'Enter' ? 13 : useMeta ? 91 : 17,
+    ctrlKey: !useMeta && modOn,
+    metaKey: useMeta && modOn,
+  });
+
+  const targets: EventTarget[] = [editor];
+  if (
+    document.activeElement &&
+    document.activeElement !== editor &&
+    document.activeElement instanceof HTMLElement
+  ) {
+    targets.push(document.activeElement);
+  }
+  // Fall back to document so React's root-level delegation also sees the event.
+  targets.push(document);
+
+  function fire(type: 'keydown' | 'keyup' | 'keypress', key: string, code: string, modOn: boolean) {
+    const init = baseInit(key, code, modOn);
+    for (const t of targets) {
+      try {
+        t.dispatchEvent(new KeyboardEvent(type, init));
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  // 1) Control/Meta down (no Enter yet).
+  fire('keydown', modifierKey, modifierCode, true);
+  await sleep(20);
+  // 2) Enter down with modifier held.
+  fire('keydown', 'Enter', 'Enter', true);
+  // 3) keypress is omitted by modern Chrome for non-printable keys; skip.
+  // 4) Enter up with modifier still held.
+  fire('keyup', 'Enter', 'Enter', true);
+  await sleep(20);
+  // 5) Control/Meta up.
+  fire('keyup', modifierKey, modifierCode, false);
+}
+
+/**
+ * Poll for visible signs that the X composer's submit happened. Returns
+ * `{ ok: true }` on the first strong indicator; `{ ok: false }` on timeout.
+ *
+ * Strong indicators (any one is enough):
+ *   - editor element disconnected from DOM
+ *   - editor visible text became empty
+ *   - editor no longer contains the original text AND looks reset
+ *   - the post button disappeared from the DOM
+ */
+export async function waitForXSubmission(
+  editor: HTMLElement,
+  originalText: string,
+  timeoutMs = 5000,
+): Promise<{ ok: boolean; elapsedMs: number; reason?: string }> {
+  const start = Date.now();
+  const target = (originalText ?? '').trim();
+  while (Date.now() - start < timeoutMs) {
+    // (1) Editor disconnected → strong signal.
+    if (!editor.isConnected) {
+      return { ok: true, elapsedMs: Date.now() - start, reason: 'editor-detached' };
+    }
+    // (2) Editor cleared (empty visible text).
+    let current = '';
+    try {
+      current = (editor.innerText ?? editor.textContent ?? '').replace(/ /g, ' ').trim();
+    } catch {
+      current = '';
+    }
+    if (current.length === 0) {
+      return { ok: true, elapsedMs: Date.now() - start, reason: 'editor-cleared' };
+    }
+    // (3) Original text gone and editor looks like a placeholder/short reset.
+    if (target.length > 0 && !current.includes(target) && current.length < 8) {
+      return { ok: true, elapsedMs: Date.now() - start, reason: 'editor-reset' };
+    }
+    // (4) Post button disappeared.
+    const btn = findXPostButton();
+    if (!btn || !btn.isConnected) {
+      return { ok: true, elapsedMs: Date.now() - start, reason: 'post-button-gone' };
+    }
+    await sleep(250);
+  }
+  return { ok: false, elapsedMs: Date.now() - start, reason: 'timeout' };
+}
+
+/**
+ * Robust single click for the X Post button. Dispatches the full mouse
+ * sequence so React's synthetic-event delegation registers a real user
+ * gesture, then calls .click() once. NEVER clicks twice.
+ */
+export async function clickXPostButton(button: HTMLButtonElement): Promise<void> {
+  try {
+    button.scrollIntoView({ block: 'center', inline: 'nearest' });
+  } catch {
+    /* ignore */
+  }
+  const rect = button.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const eventInit: MouseEventInit = {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    clientX: cx,
+    clientY: cy,
+    button: 0,
+  };
+  try {
+    button.dispatchEvent(new MouseEvent('mouseover', eventInit));
+    button.dispatchEvent(new MouseEvent('mousedown', eventInit));
+    button.dispatchEvent(new MouseEvent('mouseup', eventInit));
+  } catch (err) {
+    console.warn('[lbab/x-writer] mouse-event dispatch threw', err);
+  }
+  console.log('[lbab/x-writer] clicking post button once');
+  button.click();
+  console.log('[lbab/x-writer] post button clicked');
 }
