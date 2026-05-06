@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output (regenerated from source)
+dist/
+build/
+.cache/
+.vite/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Backend runtime data (SQLite is regenerated at boot)
+apps/backend/data/*.sqlite
+apps/backend/data/*.sqlite-*
+apps/backend/data/*.db
+apps/backend/data/*.db-*
+apps/backend/data/*.log
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Test artefacts
+coverage/
+playwright-report/
+test-results/

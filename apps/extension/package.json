@@ -1,0 +1,22 @@
+{
+  "name": "@lbab/extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome Manifest V3 extension (background SW + writer/reader content scripts) for local-browser-automation-bridge.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch --mode development",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lbab/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.25",
+    "@types/chrome": "^0.0.270",
+    "typescript": "^5.4.5",
+    "vite": "^5.4.0"
+  }
+}

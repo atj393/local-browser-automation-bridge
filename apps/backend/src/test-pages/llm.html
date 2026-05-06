@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Local LLM Test Page</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 32px auto; padding: 0 16px; color: #111; }
+    h1 { font-size: 1.4rem; }
+    .composer { border: 1px solid #ccc; border-radius: 8px; padding: 12px; }
+    textarea { width: 100%; min-height: 140px; box-sizing: border-box; font: inherit; padding: 8px; }
+    button { margin-top: 8px; padding: 8px 16px; cursor: pointer; }
+    pre { background: #0b1020; color: #d6e2ff; padding: 12px; border-radius: 6px; overflow: auto; }
+    .note { background: #e6f3ff; border: 1px solid #99c8ff; padding: 8px 12px; border-radius: 6px; margin-bottom: 16px; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Local LLM Test Page</h1>
+  <div class="note">
+    Emulates Gemini. The reader content script targets <code>#gemini-input</code>, <code>#gemini-send</code>,
+    and reads <code>#gemini-response</code>. Returns 10-item JSON 1 second after Send.
+  </div>
+  <div class="composer">
+    <label for="gemini-input"><strong>Prompt</strong></label>
+    <textarea id="gemini-input" placeholder="Paste your prompt..."></textarea>
+    <button id="gemini-send" type="button">Send</button>
+  </div>
+  <h2>Response</h2>
+  <pre id="gemini-response"></pre>
+  <script>
+    const send = document.getElementById('gemini-send');
+    const response = document.getElementById('gemini-response');
+    const input = document.getElementById('gemini-input');
+
+    send.addEventListener('click', () => {
+      response.textContent = '';
+      setTimeout(() => {
+        const items = [];
+        for (let i = 1; i <= 10; i++) {
+          items.push({ content: 'Demo generated post ' + i });
+        }
+        const obj = { items: items };
+        // Pretty-printed JSON, exactly as the model would output if it followed the rules.
+        response.textContent = JSON.stringify(obj, null, 2);
+      }, 1000);
+    });
+  </script>
+</body>
+</html>

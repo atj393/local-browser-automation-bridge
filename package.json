@@ -1,0 +1,22 @@
+{
+  "name": "local-browser-automation-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local prototype that bridges two websites in Chrome via a backend, dashboard, SQLite queue, and a single Manifest V3 extension.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter \"./apps/*\" run dev",
+    "dev:backend": "pnpm --filter @lbab/backend run dev",
+    "dev:dashboard": "pnpm --filter @lbab/dashboard run dev",
+    "dev:extension": "pnpm --filter @lbab/extension run dev",
+    "build": "pnpm -r run build",
+    "build:backend": "pnpm --filter @lbab/backend run build",
+    "build:dashboard": "pnpm --filter @lbab/dashboard run build",
+    "build:extension": "pnpm --filter @lbab/extension run build",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "packageManager": "pnpm@9.0.0"
+}

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Local Writer Test Page</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 32px auto; padding: 0 16px; color: #111; }
+    h1 { font-size: 1.4rem; }
+    .composer { border: 1px solid #ccc; border-radius: 8px; padding: 12px; }
+    textarea { width: 100%; min-height: 100px; box-sizing: border-box; font: inherit; padding: 8px; }
+    button { margin-top: 8px; padding: 8px 16px; cursor: pointer; }
+    .feed { margin-top: 24px; }
+    .feed h2 { font-size: 1.1rem; }
+    .post { background: #f7f7f7; border: 1px solid #e5e5e5; border-radius: 6px; padding: 8px; margin: 6px 0; white-space: pre-wrap; }
+    .note { background: #fff8d6; border: 1px solid #f1d96b; padding: 8px 12px; border-radius: 6px; margin-bottom: 16px; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Local Writer Test Page</h1>
+  <div class="note">
+    This page emulates a posting site (like X). The Chrome extension's writer content script targets
+    <code>#x-compose</code> and <code>#x-post-button</code> here. Use this for safe local end-to-end testing.
+  </div>
+  <div class="composer">
+    <label for="x-compose"><strong>Compose</strong></label>
+    <textarea id="x-compose" placeholder="What's happening?"></textarea>
+    <button id="x-post-button" type="button">Post</button>
+  </div>
+  <div class="feed">
+    <h2>Feed</h2>
+    <div id="feed"></div>
+  </div>
+  <script>
+    const composer = document.getElementById('x-compose');
+    const button = document.getElementById('x-post-button');
+    const feed = document.getElementById('feed');
+    button.addEventListener('click', () => {
+      const text = composer.value.trim();
+      if (!text) return;
+      const div = document.createElement('div');
+      div.className = 'post';
+      div.textContent = text;
+      feed.prepend(div);
+      composer.value = '';
+    });
+  </script>
+</body>
+</html>
