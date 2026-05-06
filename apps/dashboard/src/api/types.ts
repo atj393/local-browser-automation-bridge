@@ -3,7 +3,13 @@ export type {
   PostQueueItem,
   AutomationLog,
   StatusResponse,
+  PostSchedulerStatus,
+  BatchSchedulerStatus,
+  QueueCountsSummary,
+  SchedulerState,
   PostStatus,
   LogLevel,
+  SourceMode,
+  BatchRefillMode,
   UpdateSettingsBody,
 } from '@lbab/shared';

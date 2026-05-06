@@ -135,8 +135,11 @@ pnpm dev:extension    # builds to apps/extension/dist (watch mode)
    - **Reader tab: Connected**
    - **Writer tab: Connected**
    - (See *Troubleshooting* below if any of these stay red.)
-5. Click **Generate next batch now**. Expect 10 items to appear in the queue
-   as `pending`.
+5. Click **Generate next batch now**. Expect *N* items to appear in the
+   queue as `pending`, where *N* is the **Posts per generation** value in
+   Settings (default 10, range 1–10). The generation panel on the
+   dashboard shows the configured count, source mode, and last source URL
+   used. The success toast reports *"generated N post(s) · Source: …"*.
 6. Click **Post next item now**. The writer textarea should fill with the
    oldest pending item's content, and the queue item moves to `posted`.
 7. Open **Settings**, enable **Auto-submit writer** (still pointed at the
@@ -145,6 +148,234 @@ pnpm dev:extension    # builds to apps/extension/dist (watch mode)
    writer's `#feed`.
 9. Optional: set min interval = 10 s, max = 20 s, click **Start automation**,
    watch *Next run* update at random intervals, then **Stop automation**.
+
+---
+
+## Content sources (RSS / web pages)
+
+Each generation can use one source URL as context for Gemini, so the
+posts are based on real material instead of a generic topic. Sources are
+configured in the dashboard's **Settings → Content sources** section.
+
+- **Source URLs** — one URL per line. RSS / Atom feeds are detected
+  automatically; everything else is fetched as a normal web page and
+  reduced to title + meta description + headings + paragraphs.
+- **Source mode**
+  - **Rotate sources** *(default)* — each *Generate next batch now*
+    advances to the next URL, looping at the end.
+  - **Use first source only** — always uses the first URL in the list.
+  - **No source / prompt only** — sends the prompt without external
+    context.
+- **Posts per generation** — integer **1 to 10**, default 10. Backend
+  caps any over-generation by Gemini at this number.
+
+Safety:
+
+- Only `http://` and `https://` URLs are accepted.
+- Localhost / private IPs (`10.x`, `172.16-31.x`, `192.168.x`, `127.x`,
+  `0.0.0.0`, `::1`) are **rejected** to avoid SSRF.
+- Each fetch has a 10 s timeout, 1 MB cap, and the resulting context is
+  trimmed to ~6 k characters.
+- If a fetch fails, the backend logs a warning and continues with the
+  prompt-only fallback — generation does *not* fail.
+
+The prompt can use placeholders, which the backend replaces before
+sending to Gemini:
+
+| Placeholder              | Replaced with                                         |
+|--------------------------|-------------------------------------------------------|
+| `{{postsPerGeneration}}` | The configured number of posts (also `{{batchSize}}`).|
+| `{{sourceUrl}}`          | The selected source URL, or `(none)`.                 |
+| `{{sourceContext}}`      | Extracted RSS items or web page text.                 |
+| `{{date}}`               | Today's date in `YYYY-MM-DD`.                         |
+
+If your custom prompt doesn't include any placeholders, the backend
+appends a context block automatically.
+
+---
+
+## Source URL extraction
+
+Each generation can attach one source URL as context for Gemini. The
+backend tries several extractors in order and uses the first one that
+returns usable content:
+
+1. **RSS / Atom feed** — when the response is `application/rss+xml` /
+   `application/atom+xml` or the body starts with `<rss>` / `<feed>`.
+   Latest 8 items are summarized as title + link + date + description.
+2. **JSON-LD** — `<script type="application/ld+json">` blocks for
+   `NewsArticle`, `Article`, `BlogPosting`, `WebPage`, `ItemList`. The
+   `headline` / `description` / `articleBody` fields are pulled out.
+3. **Mozilla Readability** — best for article URLs. Skipped if the
+   extracted body is shorter than ~400 chars.
+4. **OpenGraph + meta** — `og:title`, `og:description`, `twitter:*`,
+   `<meta name="description">`, `<title>`. Always usable as a baseline.
+5. **Cheerio body** — `h1` / `h2` / `h3` / `<p>` / `<li>` text inside
+   `article` / `main` / `[role="main"]` / `.content` / `.post` /
+   `.story` / `.news` / `.article` containers (with a `<body>` fallback).
+6. **Homepage-link fallback** — when the page is a news index, the
+   extractor returns the top 30 same-origin headline links so Gemini can
+   write posts based on themes and headlines (it is told not to invent
+   facts beyond what is provided).
+
+Tips:
+
+- For best results, point at an **article URL** or an **RSS feed URL**.
+- Homepage URLs work via the link-fallback when nothing better is found.
+- Some sites block automated fetches or render content via JavaScript;
+  no extraction method works in those cases. The prompt cleanly falls
+  back to its built-in topic, and a warning is logged.
+- Tamil / non-English text is preserved as-is.
+- Browser-rendered fetch (e.g., Playwright) is not enabled — keeping the
+  prototype lightweight.
+
+### Test source extraction
+
+Use the *Test source extraction* control on the **Settings** page (or
+`POST /api/sources/test` with `{ "url": "..." }`) to debug a URL before
+adding it. The response includes the chosen extraction method, the
+extracted length, the resolved final URL after redirects, the
+content-type, and a 200-character preview.
+
+If extraction fails:
+
+| Problem | Suggested fix |
+|---|---|
+| *No usable content extracted* | Try an article URL instead of the homepage. |
+| *No usable content extracted* | Try the site's RSS feed URL if available (often `/feed`, `/rss`, `/atom.xml`). |
+| HTTP 4xx or 5xx | The site may block scraping; pick a different source. |
+| Page is JavaScript-rendered | Browser-rendered fetch is not enabled by default; pick a server-rendered URL. |
+| Times out | The site is slow or blocking; the 10 s timeout fired. |
+| URL rejected as private | Localhost / private-network URLs are blocked for SSRF safety. |
+
+---
+
+## Understanding the queue and posting timeline
+
+When you click *Generate next batch now*, items are added to the queue and
+shown on the **Queue** page. They sit there until automation runs.
+
+When you click *Start automation*:
+
+1. The backend assigns each pending item a **`scheduledFor`** time using the
+   randomized interval. The first item is scheduled at
+   `now + random(min, max)`; each subsequent item is scheduled at
+   `previous.scheduledFor + random(min, max)`.
+2. The dashboard's **Posting Timeline** panel shows:
+   - Automation status badge (Running / Paused / Posting / Stopped)
+   - The next post's content, scheduled time, and a live countdown
+   - The configured random interval (e.g. *1–4 minutes*)
+   - The **Upcoming** table — the next ten scheduled items with their
+     scheduled times and live countdowns
+   - A plain-English `automationMessage` (e.g. *"Automation is running.
+     Next post is scheduled in 02:43."*)
+
+When you click *Stop automation*:
+
+- The internal timer is cleared.
+- `scheduledFor` values are kept for transparency, but the dashboard says
+  *"Schedule is paused. Click Start automation to refresh and continue."*
+- No posts will fire while stopped.
+
+When you click *Start automation* again, the schedule is **recomputed** for
+all unposted items from `now`, so countdowns are fresh.
+
+When a new batch is generated while automation is running, the new items
+are **appended** to the existing schedule starting from the latest pending
+`scheduledFor` (so previously-scheduled items are not disturbed).
+
+When you change the min/max interval in *Settings* while automation is
+running, the schedule for all unposted items is **recalculated**. This is
+also logged. If you change the interval while automation is **stopped**,
+any stale `scheduledFor` values from the previous interval are
+**cleared** so the dashboard does not display ghost countdowns; fresh
+times are computed when you click *Start automation* again.
+
+### Batch automation vs posting automation
+
+There are now **two independent loops** running when automation is on:
+
+- **Posting interval** controls the spacing between individual X posts.
+  Lives on the post scheduler. Each pending queue item gets a
+  `scheduledFor` timestamp `previous + random(min, max)`.
+- **Batch interval** controls when Gemini is asked to create a *new
+  batch* — only after the queue becomes empty. Lives on the batch
+  scheduler. By default it waits `random(batchMin, batchMax)` before
+  calling Gemini.
+
+Example flow:
+
+```
+Settings:
+  Posts per generation:  5
+  Post interval:         1–4 minutes
+  Batch interval:        15–30 minutes
+  Refill mode:           Wait a random delay when queue is empty
+
+1. You click Generate next batch now → 5 items queued.
+2. Start automation.
+3. Posting fills the X composer every 1–4 minutes.
+4. After the 5th item posts, the queue is empty.
+5. Batch scheduler arms a timer for 15–30 minutes from now.
+6. Dashboard shows "Queue is empty. Next batch will be generated in 22:14."
+7. Timer fires → Gemini generates the next batch → posting resumes.
+```
+
+**Refill modes**
+
+- *Wait a random delay when queue is empty* (default) — the safe behavior:
+  the app waits a random delay (within the batch interval) before asking
+  Gemini for a new batch.
+- *Generate immediately when queue is empty* — calls Gemini as soon as
+  the queue empties. Useful for tight demos; not recommended for
+  long-running automation.
+
+**Manual override**
+
+The *Generate next batch now* button always bypasses the batch timer
+(but it still respects the in-memory single-flight lock and refuses if
+the reader is disconnected). When the queue already has items, this
+button still queues an additional batch on top — your post schedule is
+preserved.
+
+**Backend restart behavior**
+
+In-memory timers are lost on backend restart. The startup hook resets
+`is_batch_generation_running = 0` and `next_batch_run_at = NULL` so the
+dashboard does not show a fake countdown after a crash. Click *Start
+automation* again to resume.
+
+### Posting interval
+
+In *Settings → Posting interval*, set the minimum and maximum delay using
+**number + unit** controls (seconds / minutes / hours). The backend stores
+the values as seconds internally; the dashboard handles the conversion.
+
+- **Default**: 1–4 minutes (the *Normal* preset).
+- **Minimum allowed**: 10 seconds.
+- **Maximum allowed**: 24 hours.
+- **Maximum must be ≥ minimum.**
+
+Quick presets are provided:
+
+| Preset | Range |
+|---|---|
+| Testing | 10–20 seconds |
+| Demo | 30–60 seconds |
+| Normal *(default)* | 1–4 minutes |
+| Slow | 10–30 minutes |
+| Reset to default | 1–4 minutes |
+
+The dashboard shows a friendly range label (e.g. *"1–4 minutes"* or, for
+awkward values, *"1h 23m 20s – 2h 30m"*) and a warning banner when the
+maximum is shorter than 60 s (testing-only) or longer than 1 hour (next
+post may be far in the future). If you ever see a wildly long countdown,
+it almost certainly means a previous value was entered as raw seconds:
+open *Settings*, click *Reset to default*, and save.
+
+If `Auto-submit writer` is **off** (the safe default), the extension fills
+the X composer at each scheduled time and stops; you manually click *Post*
+in X. The queue item is marked `posted` once filling succeeds.
 
 ---
 
@@ -166,10 +397,20 @@ If selectors miss, edit
 
 ### Writer (X)
 
+This is the recommended live workflow.
+
 1. Open `https://x.com/home`. Log in.
-2. With auto-submit **off**, click **Post next item now**.
-3. Switch to the X tab; the compose box should be filled.
-4. Manually review the content and click *Post* if (and only if) you intend to.
+2. Confirm Settings → *Auto-submit writer* is **off** (the safe default).
+3. On the dashboard, click **Post next item now**.
+4. Switch to the X tab; the compose box should be filled with the next
+   queued post (including hashtags, if your prompt asked for them).
+5. **You** review the content and click *Post* in X if you want it
+   published. The backend logs the action as `filled into writer (no
+   submit)` and marks the queue item `posted` so the queue advances.
+6. Repeat as needed.
+
+The user always remains in control. Auto-submit exists for the local
+test page; using it against real X is at your own discretion and risk.
 
 ---
 
@@ -187,6 +428,10 @@ If selectors miss, edit
 | Gemini response not parsed | Your prompt must yield JSON. The backend logs the raw response preview when extraction fails. |
 | Backend says *Running* but nothing happens after restart | The startup hook resets `is_running=false` and `next_run_at=null` automatically. Click *Start automation* again. |
 | Items stuck in `posting` after a crash | The startup hook resets them to `pending` with an explanatory error message. |
+| Gemini generated JSON but the queue is empty | The response wasn't parseable JSON or every item was rejected by post validation. Check backend logs for `Could not parse Gemini response as JSON` (with raw preview) or `No valid posts after cleaning`. |
+| X composer is filled but nothing was posted | **Expected** when *Auto-submit writer* is off (the safe default). Switch to the X tab, review the content, and click *Post* manually. |
+| Source URL fetch failed | Backend logs a warning (`Source fetch failed; falling back to prompt-only`) and continues generation without external context. Check the URL in your browser. |
+| Source URL was rejected | Localhost / private-network URLs are blocked to prevent SSRF. Use a public URL. |
 
 ### Expected console logs
 

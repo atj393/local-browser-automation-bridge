@@ -11,6 +11,7 @@ interface QueueRow {
   content: string;
   raw_json: string | null;
   status: PostStatus;
+  source_url: string | null;
   scheduled_for: string | null;
   posted_at: string | null;
   failed_at: string | null;
@@ -26,6 +27,7 @@ function rowToItem(row: QueueRow): PostQueueItem {
     content: row.content,
     rawJson: row.raw_json,
     status: row.status,
+    sourceUrl: row.source_url ?? null,
     scheduledFor: row.scheduled_for,
     postedAt: row.posted_at,
     failedAt: row.failed_at,
@@ -36,19 +38,30 @@ function rowToItem(row: QueueRow): PostQueueItem {
 }
 
 export const queueService = {
-  insertBatch(items: NormalizedItem[]): { batchId: string; items: PostQueueItem[] } {
+  insertBatch(
+    items: NormalizedItem[],
+    options?: { sourceUrl?: string | null },
+  ): { batchId: string; items: PostQueueItem[] } {
     const db = getDb();
     const batchId = newBatchId();
     const now = nowIso();
+    const sourceUrl = options?.sourceUrl ?? null;
     const stmt = db.prepare(
-      `INSERT INTO post_queue (batch_id, content, raw_json, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'pending', ?, ?)`,
+      `INSERT INTO post_queue (batch_id, content, raw_json, status, source_url, created_at, updated_at)
+       VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
     );
     const ids: number[] = [];
     db.exec('BEGIN');
     try {
       for (const item of items) {
-        const result = stmt.run(batchId, item.content, safeStringify(item.raw), now, now);
+        const result = stmt.run(
+          batchId,
+          item.content,
+          safeStringify(item.raw),
+          sourceUrl,
+          now,
+          now,
+        );
         ids.push(Number(result.lastInsertRowid));
       }
       db.exec('COMMIT');
@@ -58,7 +71,9 @@ export const queueService = {
     }
     const inserted = ids
       .map((id) =>
-        db.prepare('SELECT * FROM post_queue WHERE id = ?').get(id) as QueueRow | undefined,
+        db.prepare('SELECT * FROM post_queue WHERE id = ?').get(id) as
+          | unknown as QueueRow
+          | undefined,
       )
       .filter((r): r is QueueRow => !!r)
       .map(rowToItem);
@@ -86,8 +101,7 @@ export const queueService = {
   getById(id: number): PostQueueItem | null {
     const db = getDb();
     const row = db.prepare('SELECT * FROM post_queue WHERE id = ?').get(id) as
-      | QueueRow
-      | undefined;
+      | unknown as QueueRow | undefined;
     return row ? rowToItem(row) : null;
   },
 
@@ -95,8 +109,69 @@ export const queueService = {
     const db = getDb();
     const row = db
       .prepare("SELECT * FROM post_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1")
-      .get() as QueueRow | undefined;
+      .get() as unknown as QueueRow | undefined;
     return row ? rowToItem(row) : null;
+  },
+
+  /**
+   * Atomically claim the oldest pending row, flipping it to `posting`.
+   * Uses a transaction with a conditional UPDATE so two concurrent callers
+   * cannot both claim the same row.
+   *
+   * Returns the claimed item, or null if no pending row exists.
+   */
+  claimNextPendingPost(): PostQueueItem | null {
+    const db = getDb();
+    const now = nowIso();
+    let claimedId: number | null = null;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const row = db
+        .prepare(
+          "SELECT id FROM post_queue WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1",
+        )
+        .get() as { id?: number } | undefined;
+      const id = row?.id;
+      if (id != null) {
+        const result = db
+          .prepare(
+            "UPDATE post_queue SET status = 'posting', updated_at = ? WHERE id = ? AND status = 'pending'",
+          )
+          .run(now, id);
+        if (Number(result.changes) === 1) claimedId = id;
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    if (claimedId == null) return null;
+    return this.getById(claimedId);
+  },
+
+  /**
+   * Atomically claim a specific pending row by id. Returns null if the
+   * row does not exist or is not currently `pending`.
+   */
+  claimPostById(id: number): PostQueueItem | null {
+    const db = getDb();
+    const now = nowIso();
+    let ok = false;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = db
+        .prepare(
+          "UPDATE post_queue SET status = 'posting', updated_at = ? WHERE id = ? AND status = 'pending'",
+        )
+        .run(now, id);
+      ok = Number(result.changes) === 1;
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    if (!ok) return null;
+    return this.getById(id);
   },
 
   setStatus(
@@ -164,5 +239,64 @@ export const queueService = {
   truncateContent(content: string): { trimmed: string; wasTrimmed: boolean } {
     if (content.length <= MAX_CONTENT_LENGTH) return { trimmed: content, wasTrimmed: false };
     return { trimmed: content.slice(0, MAX_CONTENT_LENGTH), wasTrimmed: true };
+  },
+
+  /**
+   * Returns all unposted (pending) items in stable order. Used by the
+   * scheduler to compute / re-compute the posting plan.
+   */
+  listPending(): PostQueueItem[] {
+    const db = getDb();
+    const rows = db
+      .prepare(
+        "SELECT * FROM post_queue WHERE status = 'pending' ORDER BY created_at ASC, id ASC",
+      )
+      .all() as unknown as QueueRow[];
+    return rows.map(rowToItem);
+  },
+
+  /**
+   * Returns the latest scheduled_for value among unposted (pending) items, or null.
+   * Used to append new batches to an existing posting plan without overlap.
+   */
+  latestScheduledFor(): string | null {
+    const db = getDb();
+    const row = db
+      .prepare(
+        "SELECT scheduled_for FROM post_queue WHERE status = 'pending' AND scheduled_for IS NOT NULL ORDER BY scheduled_for DESC LIMIT 1",
+      )
+      .get() as { scheduled_for?: string | null } | undefined;
+    return row?.scheduled_for ?? null;
+  },
+
+  /**
+   * Bulk-update scheduled_for for the given pending ids in order. Atomic.
+   */
+  setSchedule(updates: { id: number; scheduledFor: string }[]): void {
+    if (updates.length === 0) return;
+    const db = getDb();
+    const stmt = db.prepare(
+      "UPDATE post_queue SET scheduled_for = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+    );
+    db.exec('BEGIN');
+    try {
+      const now = nowIso();
+      for (const u of updates) stmt.run(u.scheduledFor, now, u.id);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  },
+
+  /**
+   * Clear scheduled_for on all currently-pending rows (used when stopping or
+   * recomputing the plan from scratch).
+   */
+  clearSchedule(): void {
+    const db = getDb();
+    db.prepare(
+      "UPDATE post_queue SET scheduled_for = NULL, updated_at = ? WHERE status = 'pending'",
+    ).run(nowIso());
   },
 };

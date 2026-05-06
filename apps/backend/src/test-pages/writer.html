@@ -9,17 +9,42 @@
     .composer { border: 1px solid #ccc; border-radius: 8px; padding: 12px; }
     textarea { width: 100%; min-height: 100px; box-sizing: border-box; font: inherit; padding: 8px; }
     button { margin-top: 8px; padding: 8px 16px; cursor: pointer; }
+    button[disabled] { opacity: 0.5; cursor: not-allowed; }
     .feed { margin-top: 24px; }
     .feed h2 { font-size: 1.1rem; }
     .post { background: #f7f7f7; border: 1px solid #e5e5e5; border-radius: 6px; padding: 8px; margin: 6px 0; white-space: pre-wrap; }
     .note { background: #fff8d6; border: 1px solid #f1d96b; padding: 8px 12px; border-radius: 6px; margin-bottom: 16px; font-size: 0.9rem; }
+    .counter {
+      display: inline-block;
+      background: #e2f4e6;
+      color: #1a7f37;
+      border: 1px solid #b6dec1;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+    .counter.dup {
+      background: #fde2df;
+      color: #c0382f;
+      border-color: #f3b8b3;
+    }
+    .timestamp { color: #6a6e7a; font-size: 11px; margin-left: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .reset-btn { margin-left: 8px; background: #fff; color: #1a1a1f; border: 1px solid #d0d3da; padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
   </style>
 </head>
 <body>
   <h1>Local Writer Test Page</h1>
   <div class="note">
-    This page emulates a posting site (like X). The Chrome extension's writer content script targets
-    <code>#x-compose</code> and <code>#x-post-button</code> here. Use this for safe local end-to-end testing.
+    Emulates a posting site (like X). The Chrome extension's writer content
+    script targets <code>#x-compose</code> and <code>#x-post-button</code>
+    here. The submit counter below makes any duplicate submit obvious.
+  </div>
+  <div>
+    <span class="counter" id="counter">Total submitted posts: 0</span>
+    <button class="reset-btn" id="reset-counter" type="button">Reset counter</button>
+    <button class="reset-btn" id="preload-leftover" type="button" title="Simulate a previous fill that wasn't submitted, so the next insert must clear-first.">Preload leftover text</button>
   </div>
   <div class="composer">
     <label for="x-compose"><strong>Compose</strong></label>
@@ -31,18 +56,94 @@
     <div id="feed"></div>
   </div>
   <script>
-    const composer = document.getElementById('x-compose');
-    const button = document.getElementById('x-post-button');
-    const feed = document.getElementById('feed');
-    button.addEventListener('click', () => {
-      const text = composer.value.trim();
-      if (!text) return;
-      const div = document.createElement('div');
-      div.className = 'post';
-      div.textContent = text;
-      feed.prepend(div);
-      composer.value = '';
-    });
+    (function () {
+      var composer = document.getElementById('x-compose');
+      var button = document.getElementById('x-post-button');
+      var feed = document.getElementById('feed');
+      var counter = document.getElementById('counter');
+      var resetBtn = document.getElementById('reset-counter');
+
+      var submittedCount = 0;
+      var lastSubmittedText = null;
+      var lastSubmittedAt = 0;
+      // Window in which an identical click is treated as a duplicate.
+      var DUP_WINDOW_MS = 1500;
+      // Briefly disable the button after click to mirror real-world behavior.
+      var BUTTON_LOCK_MS = 300;
+
+      function pad(n) { return n < 10 ? '0' + n : '' + n; }
+      function nowStamp() {
+        var d = new Date();
+        return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) + '.' + (d.getMilliseconds() + '').padStart(3, '0');
+      }
+
+      function refreshCounter(isDup) {
+        counter.textContent = 'Total submitted posts: ' + submittedCount;
+        counter.classList.toggle('dup', !!isDup);
+      }
+
+      function appendDuplicateNotice(text) {
+        var div = document.createElement('div');
+        div.className = 'post';
+        div.style.background = '#fde2df';
+        div.style.borderColor = '#f3b8b3';
+        div.innerHTML =
+          '<strong style="color:#c0382f;">DUPLICATE BLOCKED</strong>' +
+          '<span class="timestamp">' + nowStamp() + '</span><br>' +
+          (text.replace(/[<&>]/g, function (c) { return ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c]; }));
+        feed.prepend(div);
+      }
+
+      button.addEventListener('click', function () {
+        var text = composer.value.trim();
+        if (!text) return;
+
+        var now = Date.now();
+        // Guard: if the same text was posted within DUP_WINDOW_MS, treat as duplicate.
+        if (text === lastSubmittedText && now - lastSubmittedAt < DUP_WINDOW_MS) {
+          console.warn('[local-writer] duplicate submit blocked', text);
+          appendDuplicateNotice(text);
+          refreshCounter(true);
+          return;
+        }
+
+        // Briefly lock the button so a double-click does nothing.
+        button.disabled = true;
+        setTimeout(function () { button.disabled = false; }, BUTTON_LOCK_MS);
+
+        var div = document.createElement('div');
+        div.className = 'post';
+        var stamp = document.createElement('span');
+        stamp.className = 'timestamp';
+        stamp.textContent = nowStamp();
+        var body = document.createElement('div');
+        body.textContent = text;
+        div.appendChild(body);
+        div.appendChild(stamp);
+        feed.prepend(div);
+
+        submittedCount++;
+        lastSubmittedText = text;
+        lastSubmittedAt = now;
+        refreshCounter(false);
+
+        composer.value = '';
+      });
+
+      resetBtn.addEventListener('click', function () {
+        submittedCount = 0;
+        lastSubmittedText = null;
+        lastSubmittedAt = 0;
+        feed.innerHTML = '';
+        refreshCounter(false);
+      });
+
+      var preloadBtn = document.getElementById('preload-leftover');
+      preloadBtn.addEventListener('click', function () {
+        composer.value = '#OldHashtag #LeftoverDraft do not duplicate me';
+        composer.focus();
+      });
+    })();
   </script>
 </body>
 </html>

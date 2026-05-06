@@ -1,45 +1,103 @@
 import { useEffect, useState } from 'react';
-import type { AutomationSettings, UpdateSettingsBody } from '../api/types.js';
-import { DEFAULT_LLM_PROMPT } from '@lbab/shared';
+import type {
+  AutomationSettings,
+  UpdateSettingsBody,
+  SourceMode,
+  BatchRefillMode,
+} from '../api/types.js';
+import {
+  BATCH_REFILL_MODES,
+  DEFAULT_LLM_PROMPT,
+  POSTS_PER_GENERATION_MAX,
+  POSTS_PER_GENERATION_MIN,
+  SOURCE_MODES,
+} from '@lbab/shared';
+import { api } from '../api/client.js';
 import { PromptEditor } from './PromptEditor.js';
 import { WarningBox } from './WarningBox.js';
+import {
+  BATCH_INTERVAL_PRESETS,
+  INTERVAL_PRESETS,
+  buildScheduleWarning,
+  formatDurationHuman,
+  formatIntervalRange,
+  intervalToSeconds,
+  secondsToBestInterval,
+  type IntervalUnit,
+} from '../utils/time.js';
 
 interface Props {
   initial: AutomationSettings;
   onSave: (body: UpdateSettingsBody) => Promise<void>;
 }
 
+interface FormState extends Omit<UpdateSettingsBody, 'sourceUrls'> {
+  sourceUrlsRaw: string;
+}
+
+function fromSettings(s: AutomationSettings): FormState {
+  return {
+    llmPrompt: s.llmPrompt,
+    postsPerGeneration: s.postsPerGeneration,
+    minIntervalSeconds: s.minIntervalSeconds,
+    maxIntervalSeconds: s.maxIntervalSeconds,
+    autoSubmitWriter: s.autoSubmitWriter,
+    writerUrlPattern: s.writerUrlPattern,
+    readerUrlPattern: s.readerUrlPattern,
+    sourceUrlsRaw: s.sourceUrls.join('\n'),
+    sourceMode: s.sourceMode,
+    batchMinIntervalSeconds: s.batchMinIntervalSeconds,
+    batchMaxIntervalSeconds: s.batchMaxIntervalSeconds,
+    batchRefillMode: s.batchRefillMode,
+  };
+}
+
+const SOURCE_MODE_LABELS: Record<SourceMode, string> = {
+  rotate: 'Rotate sources',
+  first: 'Use first source only',
+  none: 'No source / prompt only',
+};
+
 export function SettingsForm({ initial, onSave }: Props) {
-  const [form, setForm] = useState<UpdateSettingsBody>({
-    llmPrompt: initial.llmPrompt,
-    batchSize: initial.batchSize,
-    minIntervalSeconds: initial.minIntervalSeconds,
-    maxIntervalSeconds: initial.maxIntervalSeconds,
-    autoSubmitWriter: initial.autoSubmitWriter,
-    writerUrlPattern: initial.writerUrlPattern,
-    readerUrlPattern: initial.readerUrlPattern,
-  });
+  const [form, setForm] = useState<FormState>(() => fromSettings(initial));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
+  // Test-source state.
+  const [testUrl, setTestUrl] = useState<string>('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<Awaited<ReturnType<typeof api.testSource>> | null>(
+    null,
+  );
+  const [testError, setTestError] = useState<string | null>(null);
+
   useEffect(() => {
-    setForm({
-      llmPrompt: initial.llmPrompt,
-      batchSize: initial.batchSize,
-      minIntervalSeconds: initial.minIntervalSeconds,
-      maxIntervalSeconds: initial.maxIntervalSeconds,
-      autoSubmitWriter: initial.autoSubmitWriter,
-      writerUrlPattern: initial.writerUrlPattern,
-      readerUrlPattern: initial.readerUrlPattern,
-    });
+    setForm(fromSettings(initial));
   }, [initial]);
 
   async function submit() {
     setSaving(true);
     setError(null);
+    const sourceUrls = form.sourceUrlsRaw
+      .split('\n')
+      .map((u) => u.trim())
+      .filter((u) => u.length > 0);
     try {
-      await onSave(form);
+      await onSave({
+        llmPrompt: form.llmPrompt,
+        postsPerGeneration: form.postsPerGeneration,
+        minIntervalSeconds: form.minIntervalSeconds,
+        maxIntervalSeconds: form.maxIntervalSeconds,
+        autoSubmitWriter: form.autoSubmitWriter,
+        writerUrlPattern: form.writerUrlPattern,
+        readerUrlPattern: form.readerUrlPattern,
+        sourceUrls,
+        sourceMode: form.sourceMode,
+        batchMinIntervalSeconds: form.batchMinIntervalSeconds,
+        batchMaxIntervalSeconds: form.batchMaxIntervalSeconds,
+        batchRefillMode: form.batchRefillMode,
+      });
       setSavedAt(new Date().toLocaleTimeString());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -52,50 +110,188 @@ export function SettingsForm({ initial, onSave }: Props) {
     setForm((f) => ({ ...f, llmPrompt: DEFAULT_LLM_PROMPT }));
   }
 
+  const sourceUrlsList = form.sourceUrlsRaw
+    .split('\n')
+    .map((u) => u.trim())
+    .filter((u) => u.length > 0);
+
+  const xWarning =
+    /x\.com|twitter\.com/i.test(form.writerUrlPattern) && form.autoSubmitWriter;
+
   return (
     <div className="panel">
+      <h2 className="h2" style={{ marginTop: 0 }}>Prompt</h2>
       <PromptEditor
         value={form.llmPrompt}
         onChange={(v) => setForm((f) => ({ ...f, llmPrompt: v }))}
       />
+      <div className="muted" style={{ fontSize: 12, marginTop: -6 }}>
+        Supported placeholders:{' '}
+        <code>{'{{postsPerGeneration}}'}</code>{' '}
+        <code>{'{{sourceUrl}}'}</code>{' '}
+        <code>{'{{sourceContext}}'}</code>{' '}
+        <code>{'{{date}}'}</code>. If none are present, a context block is
+        appended automatically.
+      </div>
 
+      <h2 className="h2">Generation</h2>
       <div className="field">
-        <label>Batch size (1-50)</label>
+        <label>Posts per generation ({POSTS_PER_GENERATION_MIN}–{POSTS_PER_GENERATION_MAX})</label>
         <input
           type="number"
-          min={1}
-          max={50}
-          value={form.batchSize}
-          onChange={(e) => setForm((f) => ({ ...f, batchSize: Number(e.target.value) }))}
+          min={POSTS_PER_GENERATION_MIN}
+          max={POSTS_PER_GENERATION_MAX}
+          value={form.postsPerGeneration}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, postsPerGeneration: Number(e.target.value) }))
+          }
         />
       </div>
 
-      <div className="field" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <div>
-          <label>Min interval seconds</label>
-          <input
-            type="number"
-            min={10}
-            value={form.minIntervalSeconds}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, minIntervalSeconds: Number(e.target.value) }))
-            }
-          />
-        </div>
-        <div>
-          <label>Max interval seconds</label>
-          <input
-            type="number"
-            min={10}
-            max={86400}
-            value={form.maxIntervalSeconds}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, maxIntervalSeconds: Number(e.target.value) }))
-            }
-          />
+      <IntervalControls
+        minSeconds={form.minIntervalSeconds}
+        maxSeconds={form.maxIntervalSeconds}
+        onChange={(min, max) =>
+          setForm((f) => ({ ...f, minIntervalSeconds: min, maxIntervalSeconds: max }))
+        }
+      />
+
+      <BatchIntervalControls
+        minSeconds={form.batchMinIntervalSeconds}
+        maxSeconds={form.batchMaxIntervalSeconds}
+        refillMode={form.batchRefillMode}
+        onChange={(min, max, mode) =>
+          setForm((f) => ({
+            ...f,
+            batchMinIntervalSeconds: min,
+            batchMaxIntervalSeconds: max,
+            batchRefillMode: mode,
+          }))
+        }
+      />
+
+      <h2 className="h2">Content sources</h2>
+      <div className="field">
+        <label>Source URLs (one per line — RSS feeds or web pages)</label>
+        <textarea
+          rows={6}
+          placeholder={'https://example.com/feed.xml\nhttps://example.com/blog/article'}
+          value={form.sourceUrlsRaw}
+          onChange={(e) => setForm((f) => ({ ...f, sourceUrlsRaw: e.target.value }))}
+        />
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          {sourceUrlsList.length} URL{sourceUrlsList.length === 1 ? '' : 's'} configured.
+          Localhost / private-network URLs are rejected for safety.
         </div>
       </div>
+      <div className="field">
+        <label>Source mode</label>
+        <select
+          value={form.sourceMode}
+          onChange={(e) => setForm((f) => ({ ...f, sourceMode: e.target.value as SourceMode }))}
+          style={{ padding: '8px 10px', width: '100%' }}
+        >
+          {SOURCE_MODES.map((m) => (
+            <option key={m} value={m}>{SOURCE_MODE_LABELS[m]}</option>
+          ))}
+        </select>
+      </div>
+      {initial.lastSourceUrl && (
+        <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+          Last source used: <code>{initial.lastSourceUrl}</code>{' '}
+          (index {initial.lastSourceIndex})
+        </div>
+      )}
 
+      <div className="field" style={{ background: '#f7f8fc', border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 260px' }}>
+            <label>Test source extraction</label>
+            <input
+              type="text"
+              placeholder="https://example.com or https://example.com/feed.xml"
+              value={testUrl}
+              onChange={(e) => setTestUrl(e.target.value)}
+              list="lbab-source-urls"
+            />
+            <datalist id="lbab-source-urls">
+              {sourceUrlsList.map((u) => (
+                <option key={u} value={u} />
+              ))}
+            </datalist>
+          </div>
+          <button
+            className="btn secondary"
+            disabled={testing || testUrl.trim().length === 0}
+            onClick={async () => {
+              setTesting(true);
+              setTestError(null);
+              setTestResult(null);
+              try {
+                const r = await api.testSource(testUrl.trim());
+                setTestResult(r);
+              } catch (err) {
+                setTestError(err instanceof Error ? err.message : String(err));
+              } finally {
+                setTesting(false);
+              }
+            }}
+          >
+            {testing ? 'Testing…' : 'Test source'}
+          </button>
+        </div>
+        {testError && (
+          <div className="mono" style={{ color: 'var(--danger)', marginTop: 8 }}>{testError}</div>
+        )}
+        {testResult && (
+          <div style={{ marginTop: 10, fontSize: 13 }}>
+            <div>
+              <strong>{testResult.ok ? 'OK' : 'No usable content'}</strong>
+              {' · method: '}
+              <code>{testResult.method ?? '—'}</code>
+              {' · '}
+              {testResult.extractedLength ?? 0} chars
+              {testResult.status ? ` · HTTP ${testResult.status}` : ''}
+              {testResult.size ? ` · ${Math.round((testResult.size ?? 0) / 1024)} KB` : ''}
+            </div>
+            {testResult.finalUrl && testResult.finalUrl !== testResult.url && (
+              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                Final URL: <code>{testResult.finalUrl}</code>
+              </div>
+            )}
+            {testResult.title && (
+              <div style={{ marginTop: 4 }}>
+                <span className="muted">Title: </span>{testResult.title}
+              </div>
+            )}
+            {testResult.preview && (
+              <pre
+                style={{
+                  marginTop: 8,
+                  background: '#0b1020',
+                  color: '#d6e2ff',
+                  padding: 10,
+                  borderRadius: 6,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  maxHeight: 220,
+                  overflow: 'auto',
+                  fontSize: 11,
+                }}
+              >
+                {testResult.preview}
+              </pre>
+            )}
+            {!testResult.ok && testResult.error && (
+              <div className="mono" style={{ color: 'var(--danger)', marginTop: 6 }}>
+                {testResult.error}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <h2 className="h2">Targets</h2>
       <div className="field">
         <label>Writer URL pattern</label>
         <input
@@ -114,15 +310,18 @@ export function SettingsForm({ initial, onSave }: Props) {
       </div>
 
       <WarningBox>
-        Auto-submit may post to X. Use only with test accounts and intentional demo content.
-        Safe default is disabled.
+        Auto-submit may post to X publicly. Use only with test accounts and
+        intentional demo content. Safe default is <strong>off</strong>; the
+        recommended workflow is to fill the X composer and click Post
+        manually.
       </WarningBox>
-      {/x\.com|twitter\.com/i.test(form.writerUrlPattern) && form.autoSubmitWriter && (
+      {xWarning && (
         <WarningBox>
-          <strong>Heads up:</strong> Writer URL pattern targets X/Twitter <em>and</em> auto-submit
-          is enabled. Posts will be published publicly when the scheduler runs. Switch the writer
-          URL to <code>http://localhost:4000/test/writer*</code> for safe demos, or disable
-          auto-submit.
+          <strong>Heads up:</strong> Writer URL pattern targets X/Twitter
+          <em>and</em> auto-submit is enabled. Posts will be published when the
+          scheduler runs. Switch the writer URL to{' '}
+          <code>http://localhost:4000/test/writer*</code> for safe demos, or
+          disable auto-submit.
         </WarningBox>
       )}
       <div className="field checkbox-row">
@@ -147,6 +346,373 @@ export function SettingsForm({ initial, onSave }: Props) {
       </div>
       {savedAt && <div className="muted" style={{ marginTop: 8 }}>Saved at {savedAt}</div>}
       {error && <div className="mono" style={{ color: 'var(--danger)', marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+interface IntervalControlsProps {
+  minSeconds: number;
+  maxSeconds: number;
+  onChange: (minSeconds: number, maxSeconds: number) => void;
+}
+
+function IntervalControls({ minSeconds, maxSeconds, onChange }: IntervalControlsProps) {
+  const minBest = secondsToBestInterval(minSeconds);
+  const maxBest = secondsToBestInterval(maxSeconds);
+  const [minValue, setMinValue] = useState<number>(minBest.value);
+  const [minUnit, setMinUnit] = useState<IntervalUnit>(minBest.unit);
+  const [maxValue, setMaxValue] = useState<number>(maxBest.value);
+  const [maxUnit, setMaxUnit] = useState<IntervalUnit>(maxBest.unit);
+
+  // Re-sync from parent when external settings change (e.g., after Save / Reset).
+  useEffect(() => {
+    const a = secondsToBestInterval(minSeconds);
+    const b = secondsToBestInterval(maxSeconds);
+    setMinValue(a.value);
+    setMinUnit(a.unit);
+    setMaxValue(b.value);
+    setMaxUnit(b.unit);
+  }, [minSeconds, maxSeconds]);
+
+  function applyChange(
+    nextMinValue: number,
+    nextMinUnit: IntervalUnit,
+    nextMaxValue: number,
+    nextMaxUnit: IntervalUnit,
+  ) {
+    setMinValue(nextMinValue);
+    setMinUnit(nextMinUnit);
+    setMaxValue(nextMaxValue);
+    setMaxUnit(nextMaxUnit);
+    onChange(
+      intervalToSeconds(nextMinValue, nextMinUnit),
+      intervalToSeconds(nextMaxValue, nextMaxUnit),
+    );
+  }
+
+  const warning = buildScheduleWarning(minSeconds, maxSeconds);
+  const minTooLow = minSeconds < 10;
+  const maxBelowMin = maxSeconds < minSeconds;
+  const tooLong = maxSeconds > 86_400;
+  const rangeLabel = formatIntervalRange(minSeconds, maxSeconds);
+
+  return (
+    <div className="field" style={{ background: '#f7f8fc', border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
+      <h2 className="h2" style={{ fontSize: '1rem', marginTop: 0, marginBottom: 4 }}>
+        Posting interval
+      </h2>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+        Each queued post is scheduled randomly between the minimum and maximum
+        interval. Example: <em>1–4 minutes</em> means each next post is scheduled
+        a random delay between 1 and 4 minutes after the previous one.
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div>
+          <label>Minimum posting interval</label>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              type="number"
+              min={1}
+              value={minValue}
+              onChange={(e) =>
+                applyChange(Number(e.target.value), minUnit, maxValue, maxUnit)
+              }
+              style={{ flex: '1 1 auto' }}
+            />
+            <select
+              value={minUnit}
+              onChange={(e) =>
+                applyChange(minValue, e.target.value as IntervalUnit, maxValue, maxUnit)
+              }
+              style={{ padding: '8px 10px' }}
+            >
+              <option value="seconds">seconds</option>
+              <option value="minutes">minutes</option>
+              <option value="hours">hours</option>
+            </select>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+            = {formatDurationHuman(minSeconds)}
+          </div>
+        </div>
+        <div>
+          <label>Maximum posting interval</label>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              type="number"
+              min={1}
+              value={maxValue}
+              onChange={(e) =>
+                applyChange(minValue, minUnit, Number(e.target.value), maxUnit)
+              }
+              style={{ flex: '1 1 auto' }}
+            />
+            <select
+              value={maxUnit}
+              onChange={(e) =>
+                applyChange(minValue, minUnit, maxValue, e.target.value as IntervalUnit)
+              }
+              style={{ padding: '8px 10px' }}
+            >
+              <option value="seconds">seconds</option>
+              <option value="minutes">minutes</option>
+              <option value="hours">hours</option>
+            </select>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+            = {formatDurationHuman(maxSeconds)}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10, fontSize: 13 }}>
+        <strong>Current range:</strong> {rangeLabel}
+      </div>
+
+      <div className="row" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+        {INTERVAL_PRESETS.map((p) => {
+          const active = p.minSeconds === minSeconds && p.maxSeconds === maxSeconds;
+          return (
+            <button
+              key={p.id}
+              type="button"
+              className={active ? 'btn' : 'btn secondary'}
+              onClick={() => {
+                const a = secondsToBestInterval(p.minSeconds);
+                const b = secondsToBestInterval(p.maxSeconds);
+                applyChange(a.value, a.unit, b.value, b.unit);
+              }}
+              style={{ fontSize: 12, padding: '6px 10px' }}
+              title={p.description}
+            >
+              {p.label} · {p.description}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          className="btn secondary"
+          onClick={() => applyChange(1, 'minutes', 4, 'minutes')}
+          style={{ fontSize: 12, padding: '6px 10px' }}
+        >
+          Reset to default (1–4 minutes)
+        </button>
+      </div>
+
+      {minTooLow && (
+        <WarningBox>
+          Minimum interval must be at least 10 seconds.
+        </WarningBox>
+      )}
+      {maxBelowMin && (
+        <WarningBox>
+          Maximum interval must be greater than or equal to the minimum.
+        </WarningBox>
+      )}
+      {tooLong && (
+        <WarningBox>
+          Maximum interval cannot exceed 24 hours.
+        </WarningBox>
+      )}
+      {warning && !minTooLow && !maxBelowMin && !tooLong && (
+        <WarningBox>{warning}</WarningBox>
+      )}
+    </div>
+  );
+}
+
+interface BatchIntervalControlsProps {
+  minSeconds: number;
+  maxSeconds: number;
+  refillMode: BatchRefillMode;
+  onChange: (minSeconds: number, maxSeconds: number, mode: BatchRefillMode) => void;
+}
+
+function BatchIntervalControls({
+  minSeconds,
+  maxSeconds,
+  refillMode,
+  onChange,
+}: BatchIntervalControlsProps) {
+  const minBest = secondsToBestInterval(minSeconds);
+  const maxBest = secondsToBestInterval(maxSeconds);
+  const [minValue, setMinValue] = useState<number>(minBest.value);
+  const [minUnit, setMinUnit] = useState<IntervalUnit>(minBest.unit);
+  const [maxValue, setMaxValue] = useState<number>(maxBest.value);
+  const [maxUnit, setMaxUnit] = useState<IntervalUnit>(maxBest.unit);
+
+  useEffect(() => {
+    const a = secondsToBestInterval(minSeconds);
+    const b = secondsToBestInterval(maxSeconds);
+    setMinValue(a.value);
+    setMinUnit(a.unit);
+    setMaxValue(b.value);
+    setMaxUnit(b.unit);
+  }, [minSeconds, maxSeconds]);
+
+  function applyChange(
+    nextMinValue: number,
+    nextMinUnit: IntervalUnit,
+    nextMaxValue: number,
+    nextMaxUnit: IntervalUnit,
+    nextMode: BatchRefillMode = refillMode,
+  ) {
+    setMinValue(nextMinValue);
+    setMinUnit(nextMinUnit);
+    setMaxValue(nextMaxValue);
+    setMaxUnit(nextMaxUnit);
+    onChange(
+      intervalToSeconds(nextMinValue, nextMinUnit),
+      intervalToSeconds(nextMaxValue, nextMaxUnit),
+      nextMode,
+    );
+  }
+
+  const minTooLow = minSeconds < 10;
+  const maxBelowMin = maxSeconds < minSeconds;
+  const tooLong = maxSeconds > 86_400;
+  const rangeLabel = formatIntervalRange(minSeconds, maxSeconds);
+
+  return (
+    <div
+      className="field"
+      style={{
+        background: '#f3f4ff',
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: 12,
+        marginTop: 12,
+      }}
+    >
+      <h2 className="h2" style={{ fontSize: '1rem', marginTop: 0, marginBottom: 4 }}>
+        Batch generation interval
+      </h2>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+        Controls when Gemini is asked to create a new batch <em>after the queue
+        becomes empty</em>. Post interval (above) controls the spacing between
+        individual X posts.
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div>
+          <label>Minimum batch interval</label>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              type="number"
+              min={1}
+              value={minValue}
+              onChange={(e) =>
+                applyChange(Number(e.target.value), minUnit, maxValue, maxUnit)
+              }
+              style={{ flex: '1 1 auto' }}
+            />
+            <select
+              value={minUnit}
+              onChange={(e) =>
+                applyChange(minValue, e.target.value as IntervalUnit, maxValue, maxUnit)
+              }
+              style={{ padding: '8px 10px' }}
+            >
+              <option value="seconds">seconds</option>
+              <option value="minutes">minutes</option>
+              <option value="hours">hours</option>
+            </select>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+            = {formatDurationHuman(minSeconds)}
+          </div>
+        </div>
+        <div>
+          <label>Maximum batch interval</label>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              type="number"
+              min={1}
+              value={maxValue}
+              onChange={(e) =>
+                applyChange(minValue, minUnit, Number(e.target.value), maxUnit)
+              }
+              style={{ flex: '1 1 auto' }}
+            />
+            <select
+              value={maxUnit}
+              onChange={(e) =>
+                applyChange(minValue, minUnit, maxValue, e.target.value as IntervalUnit)
+              }
+              style={{ padding: '8px 10px' }}
+            >
+              <option value="seconds">seconds</option>
+              <option value="minutes">minutes</option>
+              <option value="hours">hours</option>
+            </select>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+            = {formatDurationHuman(maxSeconds)}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10, fontSize: 13 }}>
+        <strong>Current range:</strong> {rangeLabel}
+      </div>
+
+      <div className="row" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+        {BATCH_INTERVAL_PRESETS.map((p) => {
+          const active = p.minSeconds === minSeconds && p.maxSeconds === maxSeconds;
+          return (
+            <button
+              key={p.id}
+              type="button"
+              className={active ? 'btn' : 'btn secondary'}
+              onClick={() => {
+                const a = secondsToBestInterval(p.minSeconds);
+                const b = secondsToBestInterval(p.maxSeconds);
+                applyChange(a.value, a.unit, b.value, b.unit);
+              }}
+              style={{ fontSize: 12, padding: '6px 10px' }}
+              title={p.description}
+            >
+              {p.label} · {p.description}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          className="btn secondary"
+          onClick={() => applyChange(15, 'minutes', 30, 'minutes')}
+          style={{ fontSize: 12, padding: '6px 10px' }}
+        >
+          Reset to default (15–30 minutes)
+        </button>
+      </div>
+
+      <div className="field" style={{ marginTop: 12 }}>
+        <label>Batch refill mode</label>
+        <select
+          value={refillMode}
+          onChange={(e) =>
+            applyChange(minValue, minUnit, maxValue, maxUnit, e.target.value as BatchRefillMode)
+          }
+          style={{ padding: '8px 10px', width: '100%' }}
+        >
+          <option value="random_delay">Wait a random delay when queue is empty</option>
+          <option value="immediate">Generate immediately when queue is empty</option>
+        </select>
+        <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+          {refillMode === 'random_delay'
+            ? 'Default. After the last item is posted, the app waits a random delay (within the batch interval) before asking Gemini for a new batch.'
+            : 'Aggressive. Calls Gemini as soon as the queue empties — useful for tight demos, not recommended for long-running automation.'}
+        </div>
+      </div>
+
+      {minTooLow && <WarningBox>Minimum batch interval must be at least 10 seconds.</WarningBox>}
+      {maxBelowMin && (
+        <WarningBox>Maximum batch interval must be greater than or equal to the minimum.</WarningBox>
+      )}
+      {tooLong && <WarningBox>Maximum batch interval cannot exceed 24 hours.</WarningBox>}
+      {/* Touch BATCH_REFILL_MODES to silence "imported but unused" if future code drops the enum reference. */}
+      <span style={{ display: 'none' }}>{BATCH_REFILL_MODES.length}</span>
     </div>
   );
 }

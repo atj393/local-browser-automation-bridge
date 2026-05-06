@@ -9,9 +9,17 @@ export function seedDefaultSettings(): void {
   const now = nowIso();
   db.prepare(
     `INSERT INTO automation_settings
-      (id, is_running, llm_prompt, batch_size, min_interval_seconds, max_interval_seconds,
-       auto_submit_writer, writer_url_pattern, reader_url_pattern, next_run_at, created_at, updated_at)
-     VALUES (1, 0, ?, 10, 60, 240, 0, 'https://x.com/*', 'https://gemini.google.com/*', NULL, ?, ?)`,
+      (id, is_running, llm_prompt, batch_size, posts_per_generation, min_interval_seconds, max_interval_seconds,
+       auto_submit_writer, writer_url_pattern, reader_url_pattern,
+       source_urls, source_mode, last_source_index, last_source_url,
+       batch_min_interval_seconds, batch_max_interval_seconds, batch_refill_mode,
+       next_batch_run_at, last_batch_generated_at, is_batch_generation_running,
+       next_run_at, created_at, updated_at)
+     VALUES (1, 0, ?, 10, 10, 60, 240, 0, 'https://x.com/*', 'https://gemini.google.com/*',
+             '', 'rotate', -1, NULL,
+             900, 1800, 'random_delay',
+             NULL, NULL, 0,
+             NULL, ?, ?)`,
   ).run(DEFAULT_LLM_PROMPT, now, now);
 }
 
@@ -22,7 +30,13 @@ export function seedDefaultSettings(): void {
 export function resetRuntimeStateOnStartup(): void {
   const db = getDb();
   db.prepare(
-    'UPDATE automation_settings SET is_running = 0, next_run_at = NULL, updated_at = ? WHERE id = 1',
+    `UPDATE automation_settings
+       SET is_running = 0,
+           next_run_at = NULL,
+           next_batch_run_at = NULL,
+           is_batch_generation_running = 0,
+           updated_at = ?
+       WHERE id = 1`,
   ).run(nowIso());
   // Any rows stuck in `posting` (e.g., crashed mid-flight) should go back to pending.
   db.prepare(

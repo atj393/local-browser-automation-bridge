@@ -14,7 +14,25 @@ queueRouter.get('/api/posts', (req, res) => {
   const limit = Number(req.query.limit ?? 100);
   const offset = Number(req.query.offset ?? 0);
   const items = queueService.list({ status, limit, offset });
-  res.json({ items });
+
+  // Compute queuePosition (1-based among pending, ordered by created_at ASC, id ASC)
+  // and countdownSeconds for pending items with a scheduled_for value.
+  const pendingOrdered = queueService.listPending();
+  const positionById = new Map<number, number>();
+  pendingOrdered.forEach((p, idx) => positionById.set(p.id, idx + 1));
+
+  const now = Date.now();
+  const decorated = items.map((it) => {
+    const queuePosition = positionById.get(it.id) ?? null;
+    let countdownSeconds: number | null = null;
+    if (it.status === 'pending' && it.scheduledFor) {
+      const t = Date.parse(it.scheduledFor);
+      if (!Number.isNaN(t)) countdownSeconds = Math.max(0, Math.round((t - now) / 1000));
+    }
+    return { ...it, queuePosition, countdownSeconds };
+  });
+
+  res.json({ items: decorated });
 });
 
 queueRouter.post('/api/posts/:id/retry', (req, res) => {
@@ -42,20 +60,30 @@ queueRouter.post('/api/posts/:id/post-now', async (req, res) => {
   const id = Number(req.params.id);
   const item = queueService.getById(id);
   if (!item) return res.status(404).json({ ok: false, error: 'Not found' });
+  if (item.status === 'posting') {
+    return res.status(409).json({
+      ok: false,
+      error: `Post ${id} is already in flight.`,
+    });
+  }
+  if (item.status === 'posted') {
+    return res.status(409).json({
+      ok: false,
+      error: `Post ${id} is already posted; not re-sending.`,
+    });
+  }
   if (item.status !== 'pending' && item.status !== 'failed' && item.status !== 'skipped') {
     return res.status(400).json({
       ok: false,
       error: `Cannot post item in status ${item.status}.`,
     });
   }
-  // Force back to pending so postOne sees a clean state
+  // For failed/skipped, flip back to pending so the atomic claim can grab it.
   if (item.status !== 'pending') {
     queueService.setStatus(id, 'pending', { errorMessage: null });
   }
-  const fresh = queueService.getById(id);
-  if (!fresh) return res.status(404).json({ ok: false, error: 'Not found' });
   try {
-    const result = await automationService.postOne(fresh);
+    const result = await automationService.postById(id);
     if (!result.success) {
       return res.status(502).json({ ok: false, error: result.error, postId: id });
     }

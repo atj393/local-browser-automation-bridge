@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { StatusResponse } from '../api/types.js';
+import type { AutomationSettings, StatusResponse } from '../api/types.js';
 import { api } from '../api/client.js';
 import { StatusCards } from '../components/StatusCards.js';
 import { ControlPanel } from '../components/ControlPanel.js';
 import { ConnectionChecklist } from '../components/ConnectionChecklist.js';
+import { GenerationInfoPanel } from '../components/GenerationInfoPanel.js';
+import { PostingTimelinePanel } from '../components/PostingTimelinePanel.js';
+import { BatchTimelinePanel } from '../components/BatchTimelinePanel.js';
 
 export function DashboardPage() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [settings, setSettings] = useState<AutomationSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const s = await api.getStatus();
+      const [s, settingsResp] = await Promise.all([api.getStatus(), api.getSettings()]);
       setStatus(s);
+      setSettings(settingsResp);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -30,7 +35,10 @@ export function DashboardPage() {
       <h1 className="h1">Dashboard</h1>
       {error && <div className="warning-box">Backend error: {error}</div>}
       <ConnectionChecklist status={status} />
+      <PostingTimelinePanel status={status} />
+      <BatchTimelinePanel status={status} />
       <ControlPanel status={status} onAfterAction={refresh} />
+      <GenerationInfoPanel settings={settings} />
       <StatusCards status={status} />
       {status?.lastLog && (
         <div className="panel" style={{ marginTop: 16 }}>
@@ -43,6 +51,11 @@ export function DashboardPage() {
           </div>
         </div>
       )}
+      <div className="muted" style={{ marginTop: 12, fontSize: 12 }}>
+        Safe-by-default: when X is the writer target and auto-submit is off, the
+        extension fills the composer only. Review the post and click Post in X
+        manually.
+      </div>
     </>
   );
 }

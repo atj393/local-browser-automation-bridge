@@ -1,6 +1,7 @@
 import type { PostQueueItem, PostStatus } from '../api/types.js';
 import { Badge } from './Badge.js';
 import type { BadgeVariant } from './Badge.js';
+import { formatCountdown, formatScheduledTime, liveCountdownSeconds } from '../utils/countdown.js';
 
 const variantFor = (status: PostStatus): BadgeVariant => {
   switch (status) {
@@ -37,8 +38,12 @@ export function QueueTable({ items, onRetry, onSkip, onPostNow, busyId }: Props)
         <thead>
           <tr>
             <th>ID</th>
+            <th>#</th>
             <th>Content</th>
+            <th>Source</th>
             <th>Status</th>
+            <th>Scheduled</th>
+            <th>Countdown</th>
             <th>Created</th>
             <th>Posted</th>
             <th>Failed</th>
@@ -50,8 +55,30 @@ export function QueueTable({ items, onRetry, onSkip, onPostNow, busyId }: Props)
           {items.map((it) => (
             <tr key={it.id}>
               <td className="mono">{it.id}</td>
+              <td className="mono">
+                {it.queuePosition ?? <span className="muted">—</span>}
+              </td>
               <td style={{ maxWidth: 400 }}>{it.content}</td>
+              <td className="mono" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }} title={it.sourceUrl ?? ''}>
+                {it.sourceUrl ?? <span className="muted">—</span>}
+              </td>
               <td><Badge variant={variantFor(it.status)}>{it.status}</Badge></td>
+              <td className="mono" style={{ fontSize: 12 }}>
+                {it.status === 'pending'
+                  ? formatScheduledTime(it.scheduledFor)
+                  : it.status === 'posting'
+                    ? 'Posting now'
+                    : it.status === 'posted'
+                      ? `Posted ${formatScheduledTime(it.postedAt)}`
+                      : it.status === 'failed'
+                        ? 'Failed'
+                        : '—'}
+              </td>
+              <td className="mono">
+                {it.status === 'pending'
+                  ? formatCountdown(liveCountdownSeconds(it.scheduledFor) ?? it.countdownSeconds ?? null)
+                  : '—'}
+              </td>
               <td className="mono">{formatTime(it.createdAt)}</td>
               <td className="mono">{formatTime(it.postedAt)}</td>
               <td className="mono">{formatTime(it.failedAt)}</td>

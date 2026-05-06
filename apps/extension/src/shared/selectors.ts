@@ -1,7 +1,12 @@
+// X uses Draft.js. Target the actual editable div, never a wrapper. Order
+// matters — most specific first.
 export const X_COMPOSER_SELECTORS = [
-  'div[data-testid="tweetTextarea_0"]',
+  'div.public-DraftEditor-content[contenteditable="true"][data-testid="tweetTextarea_0"]',
+  'div[contenteditable="true"][data-testid="tweetTextarea_0"][role="textbox"][aria-label="Post text"]',
+  'div[contenteditable="true"][data-testid="tweetTextarea_0"]',
+  'div.public-DraftEditor-content[contenteditable="true"][role="textbox"]',
+  'div[role="textbox"][contenteditable="true"][aria-label="Post text"]',
   'div[role="textbox"][contenteditable="true"]',
-  'div[contenteditable="true"][data-testid*="tweetTextarea"]',
   'div[contenteditable="true"]',
   'textarea',
 ];

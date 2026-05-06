@@ -26,6 +26,13 @@ export function QueuePage() {
     return () => clearInterval(id);
   }, [refresh]);
 
+  // Tick once a second so the countdown column updates smoothly.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   async function withBusy(id: number, fn: () => Promise<unknown>) {
     setBusyId(id);
     setError(null);

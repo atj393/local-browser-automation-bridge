@@ -39,7 +39,7 @@ export const api = {
   stopAutomation: () =>
     request<{ ok: boolean; settings: AutomationSettings }>('POST', '/api/automation/stop'),
   generateBatch: () =>
-    request<{ ok: boolean; inserted: number; batchId: string }>(
+    request<{ ok: boolean; inserted: number; batchId: string; sourceUrl: string | null }>(
       'POST',
       '/api/batches/generate',
     ),
@@ -70,4 +70,18 @@ export const api = {
   getLogs: (limit = 200) =>
     request<{ items: AutomationLog[] }>('GET', `/api/logs?limit=${limit}`),
   clearLogs: () => request<{ ok: boolean }>('DELETE', '/api/logs'),
+  testSource: (url: string) =>
+    request<{
+      ok: boolean;
+      url?: string | null;
+      finalUrl?: string | null;
+      method?: string;
+      contentType?: string;
+      status?: number;
+      size?: number;
+      title?: string | null;
+      extractedLength?: number;
+      preview?: string;
+      error?: string;
+    }>('POST', '/api/sources/test', { url }),
 };

@@ -18,9 +18,20 @@ export function ControlPanel({ status, onAfterAction }: Props) {
     setError(null);
     try {
       const result = await fn();
-      setMessage(
-        `${label}: ok` + (result && typeof result === 'object' ? ` ${JSON.stringify(result)}` : ''),
-      );
+      // Friendlier success summary for the two main demo actions.
+      if (result && typeof result === 'object') {
+        const r = result as { inserted?: number; sourceUrl?: string | null; resultStatus?: string };
+        if (typeof r.inserted === 'number') {
+          const src = r.sourceUrl ? ` · Source: ${r.sourceUrl}` : ' · Source: (none)';
+          setMessage(`${label}: ok — generated ${r.inserted} post(s)${src}`);
+        } else if (r.resultStatus) {
+          setMessage(`${label}: ok — writer status: ${r.resultStatus}`);
+        } else {
+          setMessage(`${label}: ok ${JSON.stringify(result)}`);
+        }
+      } else {
+        setMessage(`${label}: ok`);
+      }
     } catch (err) {
       setError(`${label}: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -34,27 +45,34 @@ export function ControlPanel({ status, onAfterAction }: Props) {
   const writerOk = !!status?.writerConnected;
   const readerOk = !!status?.readerConnected;
   const hasPending = (status?.pendingCount ?? 0) > 0;
+  const postingInFlight = (status?.postingCount ?? 0) > 0;
 
   // Reasons for disabled controls (rendered as title/tooltip).
   const generateReason = !extOk
     ? 'Extension not connected.'
     : !readerOk
       ? 'Reader tab not connected. Open Gemini or /test/llm and refresh.'
-      : '';
+      : postingInFlight
+        ? 'A post is currently being sent; please wait.'
+        : '';
   const postReason = !extOk
     ? 'Extension not connected.'
     : !writerOk
       ? 'Writer tab not connected. Open X.com/home or /test/writer and refresh.'
-      : !hasPending
-        ? 'Queue is empty. Generate a batch first.'
-        : '';
+      : postingInFlight
+        ? 'A post is already in flight (status: posting). Please wait.'
+        : !hasPending
+          ? 'Queue is empty. Generate a batch first.'
+          : '';
   const startReason = !extOk
     ? 'Extension not connected.'
     : !readerOk
       ? 'Reader tab not connected (needed to refill the queue).'
       : !writerOk
         ? 'Writer tab not connected (needed to post).'
-        : '';
+        : postingInFlight
+          ? 'A post is currently being sent; please wait.'
+          : '';
 
   const generateDisabled = busy !== null || !!generateReason;
   const postDisabled = busy !== null || !!postReason;

@@ -106,7 +106,15 @@ class ExtensionGateway {
       }
       case 'GENERATE_NEXT_BATCH_RESULT':
       case 'POST_TO_WRITER_RESULT': {
-        requestRegistry.resolve(msg.requestId, msg.payload);
+        const accepted = requestRegistry.resolve(msg.requestId, msg.payload);
+        if (!accepted) {
+          // Duplicate / late response — pending entry already settled or timed out.
+          logService.warn('Duplicate post result ignored.', {
+            type: msg.type,
+            requestId: msg.requestId,
+            payload: msg.payload,
+          });
+        }
         break;
       }
       case 'PONG':

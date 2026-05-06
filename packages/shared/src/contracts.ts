@@ -50,13 +50,20 @@ export interface PostToWriterPayload {
   postId: number;
   content: string;
   autoSubmit: boolean;
+  /**
+   * Deterministic id for a single post attempt. Format: `post:<postId>:<requestId>`.
+   * Used to dedupe across backend / background / content script.
+   */
+  operationId: string;
 }
 
 export interface PostToWriterResultPayload {
   success: boolean;
   postId: number;
-  status?: 'filled' | 'submitted';
+  operationId?: string;
+  status?: 'filled' | 'submitted' | 'duplicate_ignored';
   autoSubmitted?: boolean;
+  duplicate?: boolean;
   url?: string;
   error?: string;
 }

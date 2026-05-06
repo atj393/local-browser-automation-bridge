@@ -15,11 +15,21 @@ import { sleep, waitForStableText } from './waitUtils.js';
 
 declare global {
   interface Window {
+    __lbab_gemini_reader_loaded_v2__?: boolean;
     __local_browser_bridge_gemini_reader_loaded__?: boolean;
   }
 }
 
-if (!window.__local_browser_bridge_gemini_reader_loaded__) {
+const READER_INIT_FLAG = '__lbab_gemini_reader_loaded_v2__';
+
+if ((window as unknown as Record<string, boolean>)[READER_INIT_FLAG]) {
+  console.warn('[lbab/gemini-reader] duplicate content script load ignored');
+} else if (window.__local_browser_bridge_gemini_reader_loaded__) {
+  console.warn(
+    '[lbab/gemini-reader] previous-version content script already loaded; not initializing v2',
+  );
+} else {
+  (window as unknown as Record<string, boolean>)[READER_INIT_FLAG] = true;
   window.__local_browser_bridge_gemini_reader_loaded__ = true;
   console.log('[lbab/gemini-reader] content script loaded', window.location.href);
 
