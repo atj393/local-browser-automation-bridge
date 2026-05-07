@@ -39,11 +39,41 @@ queueRouter.post('/api/posts/:id/retry', (req, res) => {
   const id = Number(req.params.id);
   const item = queueService.getById(id);
   if (!item) return res.status(404).json({ ok: false, error: 'Not found' });
-  if (item.status !== 'failed' && item.status !== 'skipped') {
-    return res.status(400).json({ ok: false, error: 'Only failed or skipped items can be retried.' });
+  const allowed: Array<typeof item.status> = ['failed', 'skipped', 'needs_manual_post'];
+  if (!allowed.includes(item.status)) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Only failed, skipped, or needs_manual_post items can be retried.',
+    });
   }
   const updated = queueService.setStatus(id, 'pending', { errorMessage: null });
-  logService.info(`Retry requested for post ${id}.`);
+  logService.info(`Retry requested for post ${id}.`, { previousStatus: item.status });
+  res.json({ ok: true, item: updated });
+});
+
+queueRouter.post('/api/posts/:id/mark-posted', (req, res) => {
+  const id = Number(req.params.id);
+  const item = queueService.getById(id);
+  if (!item) return res.status(404).json({ ok: false, error: 'Not found' });
+  const allowed: Array<typeof item.status> = [
+    'needs_manual_post',
+    'failed',
+    'posting',
+    'pending',
+  ];
+  if (!allowed.includes(item.status)) {
+    return res.status(400).json({
+      ok: false,
+      error: `Cannot mark item with status "${item.status}" as posted.`,
+    });
+  }
+  const updated = queueService.setStatus(id, 'posted', {
+    postedAt: nowIso(),
+    errorMessage: null,
+  });
+  logService.info(`User manually confirmed post ${id} as posted.`, {
+    previousStatus: item.status,
+  });
   res.json({ ok: true, item: updated });
 });
 

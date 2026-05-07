@@ -76,6 +76,7 @@ export const POST_STATUSES = [
   'posted',
   'failed',
   'skipped',
+  'needs_manual_post',
 ] as const;
 
 export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;

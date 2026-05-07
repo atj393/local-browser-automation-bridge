@@ -216,6 +216,7 @@ export const queueService = {
       posted: 0,
       failed: 0,
       skipped: 0,
+      needs_manual_post: 0,
     };
     for (const r of rows) out[r.status] = r.c;
     return out;

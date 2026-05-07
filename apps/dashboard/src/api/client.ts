@@ -58,6 +58,8 @@ export const api = {
     request<{ ok: boolean; item: PostQueueItem }>('POST', `/api/posts/${id}/retry`),
   skipPost: (id: number) =>
     request<{ ok: boolean; item: PostQueueItem }>('POST', `/api/posts/${id}/skip`),
+  markPosted: (id: number) =>
+    request<{ ok: boolean; item: PostQueueItem }>('POST', `/api/posts/${id}/mark-posted`),
   postNow: (id: number) =>
     request<{ ok: boolean; postId?: number; resultStatus?: string }>(
       'POST',

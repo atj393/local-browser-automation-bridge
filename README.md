@@ -414,6 +414,47 @@ test page; using it against real X is at your own discretion and risk.
 
 ---
 
+## Manual posting fallback
+
+X actively protects its composer against automated input. When the
+extension's automated insertion is rejected (no `span[data-text="true"]`
+produced, post button never enables, etc.), the extension does **not**
+keep retrying. Instead it switches to a *manual-paste* mode:
+
+1. The post content is copied to the clipboard from the X tab if Chrome
+   allows it.
+2. A small visible overlay appears on X with step-by-step instructions:
+   *Click inside the X composer → Press Ctrl+V → Review → Click Post*.
+3. The queue item is moved to the new **`needs_manual_post`** status —
+   not `failed`, so it stays clearly actionable in the dashboard.
+4. The dashboard's *Queue* table renders a yellow *Manual required*
+   badge on those rows with three actions:
+   - *Copy* — re-copies the content from the dashboard (no permission
+     needed).
+   - *Mark as posted* — once you've pasted and posted manually, click
+     this; the item flips to `posted` and the queue advances.
+   - *Retry* — flips it back to `pending` so the next *Post next item
+     now* / scheduler tick will try the automated path again.
+
+The extension never bypasses or attempts to defeat X's anti-automation
+guards. We mirror exactly what a human would do (focus → paste → post).
+
+## Production option: X API
+
+Browser DOM automation is a prototype-only path. For reliable production
+posting:
+
+- Use the **official X API** (v2) with OAuth 2.0 PKCE.
+- The endpoints `POST /2/tweets` and the matching scopes (`tweet.write`,
+  `users.read`, `tweet.read`) cover the same functionality without
+  needing a logged-in browser tab.
+- Server-side posting also avoids per-tab focus, anti-automation
+  surprises, and the "manual paste fallback" workflow above.
+
+This repository intentionally does not ship an X API integration. The
+manual fallback exists so that local demos still complete cleanly when
+DOM automation is rejected, not as a substitute for the real API.
+
 ## Troubleshooting
 
 | Problem | Fix |

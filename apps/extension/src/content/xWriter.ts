@@ -24,6 +24,162 @@ function isXHost(): boolean {
   return h === 'x.com' || h.endsWith('.x.com') || h === 'twitter.com' || h.endsWith('.twitter.com');
 }
 
+/* ------------------------------------------------------------------ */
+/* Manual fallback: clipboard + on-page overlay                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Try a couple of routes to put `text` on the clipboard from a content
+ * script. Both can fail (no clipboardWrite permission, no user gesture);
+ * the function never throws and returns false in that case so the caller
+ * can render an alternate "copy from dashboard" message.
+ */
+async function copyToClipboardInPage(text: string): Promise<boolean> {
+  try {
+    if (
+      typeof navigator !== 'undefined' &&
+      navigator.clipboard &&
+      typeof navigator.clipboard.writeText === 'function'
+    ) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (err) {
+    console.warn('[lbab/x-writer] navigator.clipboard.writeText failed', err);
+  }
+
+  // Fallback: temporary textarea + execCommand('copy'). Works without an
+  // explicit clipboard permission when the page has user-gesture context.
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.top = '-9999px';
+    ta.style.left = '-9999px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {
+      ok = false;
+    }
+    document.body.removeChild(ta);
+    return ok;
+  } catch (err) {
+    console.warn('[lbab/x-writer] execCommand copy fallback failed', err);
+    return false;
+  }
+}
+
+const OVERLAY_ID = 'lbab-x-manual-overlay';
+
+function removeXManualOverlay(): void {
+  const existing = document.getElementById(OVERLAY_ID);
+  if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+}
+
+/**
+ * Inject a small visible overlay on X explaining that automated input was
+ * rejected and the user needs to paste manually. Idempotent — calling it
+ * again replaces the existing overlay with a fresh one.
+ */
+function showXManualOverlay(content: string, clipboardCopied: boolean): void {
+  removeXManualOverlay();
+  const root = document.createElement('div');
+  root.id = OVERLAY_ID;
+  Object.assign(root.style, {
+    position: 'fixed',
+    right: '20px',
+    bottom: '20px',
+    zIndex: '2147483647',
+    width: '340px',
+    maxWidth: 'calc(100vw - 40px)',
+    background: '#11141d',
+    color: '#f3f5fb',
+    border: '1px solid #2c3242',
+    borderRadius: '10px',
+    boxShadow: '0 10px 30px rgba(0,0,0,0.35)',
+    fontFamily:
+      '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
+    fontSize: '13px',
+    lineHeight: '1.4',
+    padding: '14px 14px 12px',
+  });
+
+  const title = document.createElement('div');
+  title.textContent = 'Manual posting required';
+  Object.assign(title.style, {
+    fontSize: '14px',
+    fontWeight: '700',
+    marginBottom: '6px',
+    color: '#ffd166',
+  });
+  root.appendChild(title);
+
+  const body = document.createElement('div');
+  body.textContent = clipboardCopied
+    ? 'X did not accept automated input. The post content is copied to your clipboard.'
+    : 'X did not accept automated input. Copy the content from the dashboard and paste it manually.';
+  body.style.marginBottom = '8px';
+  root.appendChild(body);
+
+  const steps = document.createElement('ol');
+  Object.assign(steps.style, { margin: '0 0 10px 18px', padding: '0' });
+  ['Click inside the X composer.', 'Press Ctrl+V (or Cmd+V).', 'Review the post.', 'Click Post manually.'].forEach((s) => {
+    const li = document.createElement('li');
+    li.textContent = s;
+    li.style.margin = '2px 0';
+    steps.appendChild(li);
+  });
+  root.appendChild(steps);
+
+  const buttonRow = document.createElement('div');
+  Object.assign(buttonRow.style, { display: 'flex', gap: '8px', marginTop: '4px' });
+
+  const copyBtn = document.createElement('button');
+  copyBtn.textContent = 'Copy content again';
+  Object.assign(copyBtn.style, {
+    flex: '1 1 auto',
+    background: '#2348d6',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '8px 10px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: '600',
+  });
+  copyBtn.addEventListener('click', async () => {
+    const ok = await copyToClipboardInPage(content);
+    copyBtn.textContent = ok ? 'Copied!' : 'Copy failed — copy from dashboard';
+    setTimeout(() => {
+      copyBtn.textContent = 'Copy content again';
+    }, 1600);
+  });
+  buttonRow.appendChild(copyBtn);
+
+  const dismissBtn = document.createElement('button');
+  dismissBtn.textContent = 'Dismiss';
+  Object.assign(dismissBtn.style, {
+    background: 'transparent',
+    color: '#d6d8e2',
+    border: '1px solid #3a3f50',
+    borderRadius: '6px',
+    padding: '8px 10px',
+    cursor: 'pointer',
+    fontSize: '12px',
+  });
+  dismissBtn.addEventListener('click', () => removeXManualOverlay());
+  buttonRow.appendChild(dismissBtn);
+
+  root.appendChild(buttonRow);
+
+  document.body.appendChild(root);
+}
+
 declare global {
   interface Window {
     __lbab_x_writer_loaded_v2__?: boolean;
@@ -171,10 +327,12 @@ async function handlePost(
   success: boolean;
   postId: number;
   operationId: string;
-  status?: 'filled' | 'submitted' | 'duplicate_ignored';
+  status?: 'filled' | 'submitted' | 'duplicate_ignored' | 'needs_manual_post';
   autoSubmitted?: boolean;
   submitMethod?: 'ctrl_enter' | 'meta_enter' | 'button_click' | 'none';
   duplicate?: boolean;
+  manualActionRequired?: boolean;
+  clipboardCopied?: boolean;
   url?: string;
   error?: string;
 }> {
@@ -228,12 +386,41 @@ async function handlePost(
     console.log('[lbab/x-writer] post button found:', !!xButton);
     console.log('[lbab/x-writer] post button enabled:', buttonEnabled);
 
-    if (!draftResult.ok) {
+    // Reject-and-fall-back to manual-paste mode whenever automated
+    // insertion did not produce real Draft.js state. We never keep
+    // re-forcing input — that is exactly the behavior X protects against.
+    const manualNeeded =
+      !draftResult.ok ||
+      draftResult.diagnostics.dataTextSpanCount === 0 ||
+      draftResult.diagnostics.blockCount === 0 ||
+      draftResult.strategy === 'manual-needed';
+
+    if (manualNeeded) {
+      console.warn('[lbab/x-writer] X automation rejected; entering manual-paste fallback', {
+        strategy: draftResult.strategy,
+        spans: draftResult.diagnostics.dataTextSpanCount,
+        blocks: draftResult.diagnostics.blockCount,
+      });
+      const clipboardCopied = await copyToClipboardInPage(content);
+      console.log(
+        `[lbab/x-writer] clipboard copy ${clipboardCopied ? 'succeeded' : 'failed'}`,
+      );
+      try {
+        showXManualOverlay(content, clipboardCopied);
+      } catch (err) {
+        console.warn('[lbab/x-writer] failed to show manual overlay', err);
+      }
+      console.log('[lbab/x-writer] manual posting required for postId', postId);
       return {
         success: false,
         postId,
         operationId,
-        error: draftResult.reason ?? 'X Draft.js insertion failed.',
+        status: 'needs_manual_post',
+        manualActionRequired: true,
+        clipboardCopied,
+        error: clipboardCopied
+          ? 'X rejected automated input. Content copied to clipboard. Click the X composer and paste manually.'
+          : 'X rejected automated input. Copy the content from the dashboard and paste it manually into the X composer.',
         url: window.location.href,
         ...({
           debug: {
@@ -241,29 +428,6 @@ async function handlePost(
             strategy: draftResult.strategy,
             attempts: draftResult.attempts,
             actualText: draftResult.text.slice(0, 240),
-            diagnostics: draftResult.diagnostics,
-          },
-        } as Record<string, unknown>),
-      };
-    }
-
-    // Hard-fail when Draft.js never produced its real block/span shape, even
-    // if the visible text matches — that is the "overlay" state.
-    if (
-      draftResult.diagnostics.dataTextSpanCount === 0 ||
-      draftResult.diagnostics.blockCount === 0
-    ) {
-      return {
-        success: false,
-        postId,
-        operationId,
-        error:
-          'X editor text appeared visually but no Draft.js block/span structure was produced. Click inside the X composer manually, then press Post next item now again.',
-        url: window.location.href,
-        ...({
-          debug: {
-            selector: selectorUsed,
-            strategy: draftResult.strategy,
             diagnostics: draftResult.diagnostics,
           },
         } as Record<string, unknown>),
@@ -282,12 +446,25 @@ async function handlePost(
 
     if (!autoSubmit) {
       if (!buttonEnabled) {
+        // Real-Draft.js shape exists but Post button never enabled — X
+        // probably suppressed our insertion. Fall back to manual paste.
+        const clipboardCopied = await copyToClipboardInPage(content);
+        try {
+          showXManualOverlay(content, clipboardCopied);
+        } catch {
+          /* ignore */
+        }
+        console.log('[lbab/x-writer] manual posting required for postId', postId);
         return {
           success: false,
           postId,
           operationId,
-          error:
-            'X Draft.js state did not update; Post button is disabled. Click inside the X composer manually, then press Post next item now again.',
+          status: 'needs_manual_post',
+          manualActionRequired: true,
+          clipboardCopied,
+          error: clipboardCopied
+            ? 'X rejected automated input. Content copied to clipboard. Click the X composer and paste manually.'
+            : 'X rejected automated input. Copy the content from the dashboard and paste it manually into the X composer.',
           url: window.location.href,
           ...({
             debug: {

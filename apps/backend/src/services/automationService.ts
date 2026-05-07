@@ -96,6 +96,35 @@ async function postClaimed(item: PostQueueItem): Promise<PostNextResult> {
     if (!writerResult.success) {
       const errMsg = writerResult.error ?? 'Writer reported failure.';
       const fresh = queueService.getById(item.id);
+      // Route manual-required failures to `needs_manual_post` instead of
+      // `failed` so the dashboard can surface a copy/paste workflow.
+      const manualNeeded =
+        writerResult.manualActionRequired === true ||
+        writerResult.status === 'needs_manual_post';
+      if (manualNeeded) {
+        if (fresh && fresh.status === 'posting') {
+          queueService.setStatus(item.id, 'needs_manual_post', {
+            errorMessage: errMsg,
+          });
+        }
+        logService.warn('X automation rejected; queue item marked needs_manual_post.', {
+          postId: item.id,
+          operationId,
+          clipboardCopied: !!writerResult.clipboardCopied,
+        });
+        return {
+          success: false,
+          postId: item.id,
+          operationId,
+          error: errMsg,
+          // Non-typed but consumed by the route as part of the JSON pass-through.
+          ...({
+            manualActionRequired: true,
+            clipboardCopied: !!writerResult.clipboardCopied,
+            resultStatus: 'needs_manual_post',
+          } as Record<string, unknown>),
+        };
+      }
       if (fresh && fresh.status === 'posting') {
         queueService.setStatus(item.id, 'failed', {
           errorMessage: errMsg,

@@ -63,11 +63,19 @@ export interface PostToWriterResultPayload {
   success: boolean;
   postId: number;
   operationId?: string;
-  status?: 'filled' | 'submitted' | 'duplicate_ignored';
+  status?: 'filled' | 'submitted' | 'duplicate_ignored' | 'needs_manual_post';
   autoSubmitted?: boolean;
   /** Which submit strategy actually completed. 'none' when autoSubmit was off. */
   submitMethod?: WriterSubmitMethod;
   duplicate?: boolean;
+  /**
+   * True when the writer page rejected automated input and the user must
+   * paste/post manually. Backend uses this to flip the queue item to
+   * `needs_manual_post` instead of `failed`.
+   */
+  manualActionRequired?: boolean;
+  /** True if the writer was able to copy the content to the clipboard. */
+  clipboardCopied?: boolean;
   url?: string;
   error?: string;
 }

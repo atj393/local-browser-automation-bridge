@@ -85,6 +85,7 @@ export function QueuePage() {
         onRetry={(id) => withBusy(id, () => api.retryPost(id))}
         onSkip={(id) => withBusy(id, () => api.skipPost(id))}
         onPostNow={(id) => withBusy(id, () => api.postNow(id))}
+        onMarkPosted={(id) => withBusy(id, () => api.markPosted(id))}
       />
     </>
   );
