@@ -14,12 +14,15 @@ CREATE TABLE IF NOT EXISTS automation_settings (
   source_mode TEXT NOT NULL DEFAULT 'rotate',
   last_source_index INTEGER NOT NULL DEFAULT -1,
   last_source_url TEXT,
+  last_source_id INTEGER,
   batch_min_interval_seconds INTEGER NOT NULL DEFAULT 900,
   batch_max_interval_seconds INTEGER NOT NULL DEFAULT 1800,
   batch_refill_mode TEXT NOT NULL DEFAULT 'random_delay',
   next_batch_run_at TEXT,
   last_batch_generated_at TEXT,
   is_batch_generation_running INTEGER NOT NULL DEFAULT 0,
+  queue_selection_mode TEXT NOT NULL DEFAULT 'rotate_categories',
+  last_posted_category_id INTEGER,
   next_run_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -31,7 +34,10 @@ CREATE TABLE IF NOT EXISTS post_queue (
   content TEXT NOT NULL,
   raw_json TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
+  source_id INTEGER,
   source_url TEXT,
+  category_id INTEGER,
+  category_name TEXT,
   scheduled_for TEXT,
   posted_at TEXT,
   failed_at TEXT,
@@ -42,6 +48,9 @@ CREATE TABLE IF NOT EXISTS post_queue (
 
 CREATE INDEX IF NOT EXISTS idx_post_queue_status ON post_queue (status);
 CREATE INDEX IF NOT EXISTS idx_post_queue_created ON post_queue (created_at);
+CREATE INDEX IF NOT EXISTS idx_post_queue_category ON post_queue (category_id);
+CREATE INDEX IF NOT EXISTS idx_post_queue_status_category ON post_queue (status, category_id);
+CREATE INDEX IF NOT EXISTS idx_post_queue_posted_at ON post_queue (posted_at);
 
 CREATE TABLE IF NOT EXISTS automation_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,4 +61,35 @@ CREATE TABLE IF NOT EXISTS automation_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_automation_logs_created ON automation_logs (created_at);
+
+CREATE TABLE IF NOT EXISTS categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  slug TEXT NOT NULL UNIQUE,
+  description TEXT,
+  color TEXT,
+  is_enabled INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS content_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  url TEXT NOT NULL,
+  label TEXT,
+  category_id INTEGER NOT NULL,
+  is_enabled INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  last_used_at TEXT,
+  last_fetch_status TEXT,
+  last_fetch_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (category_id) REFERENCES categories(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_content_sources_enabled_sort ON content_sources (is_enabled, sort_order);
+CREATE INDEX IF NOT EXISTS idx_content_sources_category ON content_sources (category_id);
+CREATE INDEX IF NOT EXISTS idx_content_sources_url ON content_sources (url);
 `;

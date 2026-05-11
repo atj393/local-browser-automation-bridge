@@ -91,7 +91,14 @@ export function PostingTimelinePanel({ status }: { status: StatusResponse | null
       {status.nextPost ? (
         <div style={{ background: '#f7f8fc', border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
           <div className="label" style={{ color: 'var(--muted)', fontSize: 12, textTransform: 'uppercase' }}>Next post</div>
-          <div style={{ marginTop: 6, lineHeight: 1.4 }}>{status.nextPost.content}</div>
+          <div style={{ marginTop: 6, lineHeight: 1.4 }}>
+            {status.nextPost.categoryName && (
+              <span className="badge muted" style={{ marginRight: 8 }}>
+                {status.nextPost.categoryName}
+              </span>
+            )}
+            {status.nextPost.content}
+          </div>
           <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
             #{status.nextPost.id} · {status.nextPost.sourceUrl ?? 'no source'}
           </div>
@@ -112,6 +119,7 @@ export function PostingTimelinePanel({ status }: { status: StatusResponse | null
               <thead>
                 <tr>
                   <th style={{ width: 40 }}>#</th>
+                  <th style={{ width: 110 }}>Category</th>
                   <th>Content</th>
                   <th style={{ width: 130 }}>Scheduled</th>
                   <th style={{ width: 100 }}>Countdown</th>
@@ -126,6 +134,13 @@ export function PostingTimelinePanel({ status }: { status: StatusResponse | null
                   return (
                     <tr key={entry.id}>
                       <td className="mono">{entry.position}</td>
+                      <td style={{ fontSize: 12 }}>
+                        {entry.categoryName ? (
+                          <span className="badge muted">{entry.categoryName}</span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
                       <td style={{ maxWidth: 360 }}>{entry.content}</td>
                       <td className="mono" style={{ fontSize: 12 }}>{formatScheduledTime(entry.scheduledFor)}</td>
                       <td className="mono">{status.isRunning ? formatCountdown(live) : '—'}</td>

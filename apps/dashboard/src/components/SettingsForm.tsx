@@ -15,6 +15,8 @@ import {
 import { api } from '../api/client.js';
 import { PromptEditor } from './PromptEditor.js';
 import { WarningBox } from './WarningBox.js';
+import { CategoryEditor } from './CategoryEditor.js';
+import { ContentSourcesEditor } from './ContentSourcesEditor.js';
 import {
   BATCH_INTERVAL_PRESETS,
   INTERVAL_PRESETS,
@@ -49,6 +51,7 @@ function fromSettings(s: AutomationSettings): FormState {
     batchMinIntervalSeconds: s.batchMinIntervalSeconds,
     batchMaxIntervalSeconds: s.batchMaxIntervalSeconds,
     batchRefillMode: s.batchRefillMode,
+    queueSelectionMode: s.queueSelectionMode,
   };
 }
 
@@ -63,6 +66,9 @@ export function SettingsForm({ initial, onSave }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+
+  // Force-refresh signal for the ContentSourcesEditor when categories change.
+  const [categoriesVersion, setCategoriesVersion] = useState(0);
 
   // Test-source state.
   const [testUrl, setTestUrl] = useState<string>('');
@@ -97,6 +103,7 @@ export function SettingsForm({ initial, onSave }: Props) {
         batchMinIntervalSeconds: form.batchMinIntervalSeconds,
         batchMaxIntervalSeconds: form.batchMaxIntervalSeconds,
         batchRefillMode: form.batchRefillMode,
+        queueSelectionMode: form.queueSelectionMode,
       });
       setSavedAt(new Date().toLocaleTimeString());
     } catch (err) {
@@ -170,22 +177,11 @@ export function SettingsForm({ initial, onSave }: Props) {
         }
       />
 
-      <h2 className="h2">Content sources</h2>
+      <h2 className="h2">Categories &amp; content sources</h2>
+      <CategoryEditor onChange={() => setCategoriesVersion((v) => v + 1)} />
+      <ContentSourcesEditor categoriesVersion={categoriesVersion} />
       <div className="field">
-        <label>Source URLs (one per line — RSS feeds or web pages)</label>
-        <textarea
-          rows={6}
-          placeholder={'https://example.com/feed.xml\nhttps://example.com/blog/article'}
-          value={form.sourceUrlsRaw}
-          onChange={(e) => setForm((f) => ({ ...f, sourceUrlsRaw: e.target.value }))}
-        />
-        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-          {sourceUrlsList.length} URL{sourceUrlsList.length === 1 ? '' : 's'} configured.
-          Localhost / private-network URLs are rejected for safety.
-        </div>
-      </div>
-      <div className="field">
-        <label>Source mode</label>
+        <label>Source rotation mode</label>
         <select
           value={form.sourceMode}
           onChange={(e) => setForm((f) => ({ ...f, sourceMode: e.target.value as SourceMode }))}
@@ -195,11 +191,37 @@ export function SettingsForm({ initial, onSave }: Props) {
             <option key={m} value={m}>{SOURCE_MODE_LABELS[m]}</option>
           ))}
         </select>
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          Controls which enabled content source is picked next when a batch is
+          generated. Categories are independent: each generated post inherits
+          the category of whichever source produced it.
+        </div>
+      </div>
+      <div className="field">
+        <label>Queue posting strategy</label>
+        <select
+          value={form.queueSelectionMode}
+          onChange={(e) =>
+            setForm((f) => ({
+              ...f,
+              queueSelectionMode: e.target.value as typeof f.queueSelectionMode,
+            }))
+          }
+          style={{ padding: '8px 10px', width: '100%' }}
+        >
+          <option value="rotate_categories">Rotate categories (recommended)</option>
+          <option value="oldest_first">Oldest first</option>
+        </select>
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          {form.queueSelectionMode === 'rotate_categories'
+            ? 'Avoids posting the same category twice in a row when multiple categories are pending.'
+            : 'Posts queue items strictly in queue order, ignoring category.'}
+        </div>
       </div>
       {initial.lastSourceUrl && (
         <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
-          Last source used: <code>{initial.lastSourceUrl}</code>{' '}
-          (index {initial.lastSourceIndex})
+          Last source used: <code>{initial.lastSourceUrl}</code>
+          {initial.lastSourceId != null ? ` (id ${initial.lastSourceId})` : ''}
         </div>
       )}
 

@@ -60,9 +60,16 @@ class PostScheduler {
       logService.info('Queue schedule recalculated: empty queue.', { reason });
       return;
     }
+    // Apply category-aware rotation before assigning scheduled_for so the
+    // dashboard timeline reflects the actual posting order.
+    const ordered = queueService.orderItemsForPosting(
+      items,
+      settings.lastPostedCategoryId,
+      settings.queueSelectionMode,
+    );
     const updates: { id: number; scheduledFor: string }[] = [];
     let cursorMs = Date.now();
-    for (const item of items) {
+    for (const item of ordered) {
       cursorMs += getRandomDelay(settings.minIntervalSeconds, settings.maxIntervalSeconds);
       updates.push({ id: item.id, scheduledFor: new Date(cursorMs).toISOString() });
     }
@@ -77,6 +84,8 @@ class PostScheduler {
       maxInterval: settings.maxIntervalSeconds,
       firstScheduled: first?.scheduledFor,
       lastScheduled: last?.scheduledFor,
+      queueSelectionMode: settings.queueSelectionMode,
+      lastPostedCategoryId: settings.lastPostedCategoryId,
     });
   }
 
@@ -91,8 +100,21 @@ class PostScheduler {
     const anchor = queueService.latestScheduledFor();
     let cursorMs = anchor ? Date.parse(anchor) : Date.now();
     if (Number.isNaN(cursorMs)) cursorMs = Date.now();
+    // Seed the rotation with the last scheduled (already-ordered) item's
+    // category so new items continue the alternation cleanly.
+    const lastScheduledItem = (() => {
+      const pending = queueService.listPending().filter((i) => i.scheduledFor !== null);
+      return pending.length ? pending[pending.length - 1] : null;
+    })();
+    const rotationSeedCategory =
+      lastScheduledItem?.categoryId ?? settings.lastPostedCategoryId ?? null;
+    const ordered = queueService.orderItemsForPosting(
+      items,
+      rotationSeedCategory,
+      settings.queueSelectionMode,
+    );
     const updates: { id: number; scheduledFor: string }[] = [];
-    for (const item of items) {
+    for (const item of ordered) {
       cursorMs += getRandomDelay(settings.minIntervalSeconds, settings.maxIntervalSeconds);
       updates.push({ id: item.id, scheduledFor: new Date(cursorMs).toISOString() });
     }

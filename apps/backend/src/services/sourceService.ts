@@ -5,9 +5,12 @@ import {
 } from '@lbab/shared';
 import { logService } from './logService.js';
 import { settingsService } from './settingsService.js';
+import { contentSourceService } from './contentSourceService.js';
 import { extractFromHtml, type ExtractionMethod, cleanExtractedText } from './htmlExtractor.js';
 
 export interface SourceContext {
+  sourceId: number | null;
+  sourceLabel: string | null;
   url: string | null;
   finalUrl: string | null;
   title: string | null;
@@ -17,6 +20,9 @@ export interface SourceContext {
   status?: number;
   size?: number;
   preview: string;
+  categoryId: number | null;
+  categoryName: string | null;
+  categorySlug: string | null;
 }
 
 const PRIVATE_HOSTNAMES = new Set(['localhost', '0.0.0.0', '::1', '[::1]']);
@@ -232,33 +238,40 @@ function chooseSourceUrl(
  * Public test API used by both the prompt service (for the live generation
  * path) and the /api/sources/test endpoint (for debugging / Settings UI).
  */
+function emptyContext(
+  rawUrl: string | null,
+  partial: Partial<SourceContext> = {},
+): SourceContext {
+  return {
+    sourceId: null,
+    sourceLabel: null,
+    url: rawUrl,
+    finalUrl: null,
+    title: null,
+    text: '',
+    method: 'none',
+    preview: '',
+    categoryId: null,
+    categoryName: null,
+    categorySlug: null,
+    ...partial,
+  };
+}
+
 export async function fetchAndExtractSource(rawUrl: string): Promise<SourceContext> {
   logService.info('Source fetch started.', { url: rawUrl });
   const allowed = isAllowedSourceUrl(rawUrl);
   if (!allowed.ok) {
-    return {
-      url: rawUrl,
-      finalUrl: null,
-      title: null,
-      text: '',
-      method: 'none',
-      preview: '',
-    };
+    return emptyContext(rawUrl);
   }
 
   const fetched = await fetchSource(rawUrl);
   if (!fetched.ok) {
     logService.warn('Source fetch failed.', { url: rawUrl, error: fetched.error });
-    return {
-      url: rawUrl,
+    return emptyContext(rawUrl, {
       finalUrl: fetched.finalUrl ?? null,
-      title: null,
-      text: '',
-      method: 'none',
-      contentType: undefined,
       status: fetched.status,
-      preview: '',
-    };
+    });
   }
 
   logService.info('Source fetch completed.', {
@@ -280,8 +293,7 @@ export async function fetchAndExtractSource(rawUrl: string): Promise<SourceConte
       items: items.length,
       length: finalText.length,
     });
-    return {
-      url: rawUrl,
+    return emptyContext(rawUrl, {
       finalUrl: fetched.finalUrl,
       title: items[0]?.title ?? null,
       text: finalText,
@@ -290,7 +302,7 @@ export async function fetchAndExtractSource(rawUrl: string): Promise<SourceConte
       status: fetched.status,
       size: fetched.size,
       preview: finalText.slice(0, 200),
-    };
+    });
   }
 
   const ext = extractFromHtml(fetched.body, fetched.finalUrl);
@@ -303,8 +315,7 @@ export async function fetchAndExtractSource(rawUrl: string): Promise<SourceConte
     fallbackReason: ext.diagnostics.fallbackReason,
   });
 
-  return {
-    url: rawUrl,
+  return emptyContext(rawUrl, {
     finalUrl: fetched.finalUrl,
     title: ext.title,
     text: ext.text,
@@ -313,34 +324,59 @@ export async function fetchAndExtractSource(rawUrl: string): Promise<SourceConte
     status: fetched.status,
     size: fetched.size,
     preview: ext.text.slice(0, 200),
-  };
+  });
 }
 
 export const sourceService = {
   isAllowedSourceUrl,
   fetchAndExtractSource,
 
+  /**
+   * Choose the next enabled content_source and fetch its content. Persists
+   * `last_source_id` (and `last_source_url`) after the fetch — success or
+   * failure — so rotation always advances. Returns an empty context when
+   * no source is selected.
+   */
   async getNextSourceContext(): Promise<SourceContext> {
     const settings = settingsService.get();
-    const urls = settings.sourceUrls;
-    const { url, index } = chooseSourceUrl(urls, settings.sourceMode, settings.lastSourceIndex);
+    const source = contentSourceService.chooseNext(settings.sourceMode, settings.lastSourceId);
 
-    if (!url) {
-      logService.info('Source: none selected (mode/none or no URLs).', {
+    if (!source) {
+      logService.info('Source: none selected (mode/none or no enabled sources).', {
         mode: settings.sourceMode,
+        enabledSources: contentSourceService.listEnabled().length,
       });
-      return {
-        url: null,
-        finalUrl: null,
-        title: null,
-        text: '',
-        method: 'none',
-        preview: '',
-      };
+      return emptyContext(null);
     }
 
-    const ctx = await fetchAndExtractSource(url);
-    settingsService.setSourceProgress(index, url);
+    logService.info('Source: chose next.', {
+      sourceId: source.id,
+      sourceUrl: source.url,
+      categoryId: source.categoryId,
+      categoryName: source.categoryName,
+      mode: settings.sourceMode,
+    });
+
+    const fetched = await fetchAndExtractSource(source.url);
+    const ctx: SourceContext = {
+      ...fetched,
+      sourceId: source.id,
+      sourceLabel: source.label,
+      categoryId: source.categoryId,
+      categoryName: source.categoryName,
+      categorySlug: source.categorySlug,
+    };
+
+    settingsService.setSourceProgress(source.id, source.url);
+    contentSourceService.markUsed(
+      source.id,
+      ctx.text.length > 0 ? 'ok' : 'error',
+      ctx.text.length > 0 ? null : 'No usable content extracted.',
+    );
+
     return ctx;
   },
 };
+
+// Re-export for chooseSourceUrl callers that may still depend on its presence.
+export { chooseSourceUrl };

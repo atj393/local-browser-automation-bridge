@@ -56,6 +56,7 @@ Source/context:
 
 export const SOURCE_MODES = ['rotate', 'first', 'none'] as const;
 export const BATCH_REFILL_MODES = ['immediate', 'random_delay'] as const;
+export const QUEUE_SELECTION_MODES = ['oldest_first', 'rotate_categories'] as const;
 export const BATCH_INTERVAL_DEFAULT_MIN_SECONDS = 900;
 export const BATCH_INTERVAL_DEFAULT_MAX_SECONDS = 1800;
 

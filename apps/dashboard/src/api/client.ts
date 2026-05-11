@@ -5,6 +5,12 @@ import type {
   StatusResponse,
   UpdateSettingsBody,
   PostStatus,
+  Category,
+  ContentSource,
+  CreateCategoryBody,
+  UpdateCategoryBody,
+  CreateContentSourceBody,
+  UpdateContentSourceBody,
 } from './types.js';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -86,4 +92,25 @@ export const api = {
       preview?: string;
       error?: string;
     }>('POST', '/api/sources/test', { url }),
+
+  // Categories
+  listCategories: () => request<{ items: Category[] }>('GET', '/api/categories'),
+  createCategory: (body: CreateCategoryBody) =>
+    request<{ ok: boolean; item: Category }>('POST', '/api/categories', body),
+  updateCategory: (id: number, body: UpdateCategoryBody) =>
+    request<{ ok: boolean; item: Category }>('PUT', `/api/categories/${id}`, body),
+  disableCategory: (id: number) =>
+    request<{ ok: boolean; item: Category }>('POST', `/api/categories/${id}/disable`),
+  deleteCategory: (id: number) =>
+    request<{ ok: boolean; error?: string }>('DELETE', `/api/categories/${id}`),
+
+  // Content sources
+  listContentSources: () =>
+    request<{ items: ContentSource[] }>('GET', '/api/content-sources'),
+  createContentSource: (body: CreateContentSourceBody) =>
+    request<{ ok: boolean; item: ContentSource }>('POST', '/api/content-sources', body),
+  updateContentSource: (id: number, body: UpdateContentSourceBody) =>
+    request<{ ok: boolean; item: ContentSource }>('PUT', `/api/content-sources/${id}`, body),
+  deleteContentSource: (id: number) =>
+    request<{ ok: boolean }>('DELETE', `/api/content-sources/${id}`),
 };

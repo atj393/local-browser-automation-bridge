@@ -1,4 +1,9 @@
-import type { PostQueueItem, PostStatus, NormalizedItem } from '@lbab/shared';
+import type {
+  PostQueueItem,
+  PostStatus,
+  NormalizedItem,
+  QueueSelectionMode,
+} from '@lbab/shared';
 import { MAX_CONTENT_LENGTH } from '@lbab/shared';
 import { getDb } from '../db/database.js';
 import { nowIso } from '../utils/date.js';
@@ -11,7 +16,10 @@ interface QueueRow {
   content: string;
   raw_json: string | null;
   status: PostStatus;
+  source_id: number | null;
   source_url: string | null;
+  category_id: number | null;
+  category_name: string | null;
   scheduled_for: string | null;
   posted_at: string | null;
   failed_at: string | null;
@@ -27,7 +35,10 @@ function rowToItem(row: QueueRow): PostQueueItem {
     content: row.content,
     rawJson: row.raw_json,
     status: row.status,
+    sourceId: row.source_id ?? null,
     sourceUrl: row.source_url ?? null,
+    categoryId: row.category_id ?? null,
+    categoryName: row.category_name ?? null,
     scheduledFor: row.scheduled_for,
     postedAt: row.posted_at,
     failedAt: row.failed_at,
@@ -37,18 +48,84 @@ function rowToItem(row: QueueRow): PostQueueItem {
   };
 }
 
+/**
+ * Pure ordering helper. Given a list of pending items, produces the order in
+ * which they should be posted under `mode`, starting from `lastCategoryId`.
+ *
+ * For `rotate_categories`: repeatedly picks the oldest remaining item whose
+ * category differs from the previous pick (with `lastCategoryId` as the
+ * seed). Falls back to oldest overall when only one category remains.
+ *
+ * For `oldest_first`: returns items unchanged (assumed already in oldest-
+ * first order).
+ */
+export function orderItemsForPosting(
+  items: PostQueueItem[],
+  lastCategoryId: number | null,
+  mode: QueueSelectionMode,
+): PostQueueItem[] {
+  if (mode === 'oldest_first' || items.length <= 1) return [...items];
+  // Group by category, preserving input order (which is oldest-first).
+  const byCategory = new Map<number | null, PostQueueItem[]>();
+  for (const it of items) {
+    const key = it.categoryId;
+    const bucket = byCategory.get(key);
+    if (bucket) bucket.push(it);
+    else byCategory.set(key, [it]);
+  }
+  const result: PostQueueItem[] = [];
+  let prev: number | null = lastCategoryId;
+  while (
+    Array.from(byCategory.values()).some((b) => b.length > 0)
+  ) {
+    // Candidate categories with non-empty buckets and not equal to prev.
+    const nonEmptyKeys = Array.from(byCategory.entries())
+      .filter(([, b]) => b.length > 0)
+      .map(([k]) => k);
+    const otherKeys = nonEmptyKeys.filter((k) => k !== prev);
+    const pickKey = otherKeys.length > 0 ? otherKeys : nonEmptyKeys;
+    // Within the candidate set, pick the category whose oldest item has
+    // the earliest created_at. This gives a stable rotation that respects
+    // queue age within each category.
+    let chosenKey: number | null = pickKey[0]!;
+    let chosenOldest = byCategory.get(chosenKey)![0]!.createdAt;
+    for (let i = 1; i < pickKey.length; i++) {
+      const k = pickKey[i]!;
+      const head = byCategory.get(k)![0]!;
+      if (head.createdAt < chosenOldest) {
+        chosenKey = k;
+        chosenOldest = head.createdAt;
+      }
+    }
+    const picked = byCategory.get(chosenKey)!.shift()!;
+    result.push(picked);
+    prev = picked.categoryId;
+  }
+  return result;
+}
+
 export const queueService = {
+  orderItemsForPosting,
   insertBatch(
     items: NormalizedItem[],
-    options?: { sourceUrl?: string | null },
+    options?: {
+      sourceId?: number | null;
+      sourceUrl?: string | null;
+      categoryId?: number | null;
+      categoryName?: string | null;
+    },
   ): { batchId: string; items: PostQueueItem[] } {
     const db = getDb();
     const batchId = newBatchId();
     const now = nowIso();
+    const sourceId = options?.sourceId ?? null;
     const sourceUrl = options?.sourceUrl ?? null;
+    const categoryId = options?.categoryId ?? null;
+    const categoryName = options?.categoryName ?? null;
     const stmt = db.prepare(
-      `INSERT INTO post_queue (batch_id, content, raw_json, status, source_url, created_at, updated_at)
-       VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
+      `INSERT INTO post_queue
+         (batch_id, content, raw_json, status, source_id, source_url, category_id, category_name, created_at, updated_at)
+       VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
     );
     const ids: number[] = [];
     db.exec('BEGIN');
@@ -58,7 +135,10 @@ export const queueService = {
           batchId,
           item.content,
           safeStringify(item.raw),
+          sourceId,
           sourceUrl,
+          categoryId,
+          categoryName,
           now,
           now,
         );
@@ -132,6 +212,96 @@ export const queueService = {
         )
         .get() as { id?: number } | undefined;
       const id = row?.id;
+      if (id != null) {
+        const result = db
+          .prepare(
+            "UPDATE post_queue SET status = 'posting', updated_at = ? WHERE id = ? AND status = 'pending'",
+          )
+          .run(now, id);
+        if (Number(result.changes) === 1) claimedId = id;
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    if (claimedId == null) return null;
+    return this.getById(claimedId);
+  },
+
+  /**
+   * Category-aware claim. For `mode === 'rotate_categories'`, prefers the
+   * oldest pending item whose category differs from `lastPostedCategoryId`
+   * — but falls back to the absolute oldest pending row when no other
+   * category is available. For `mode === 'oldest_first'`, identical to
+   * `claimNextPendingPost()`.
+   *
+   * The most important correctness rule for the rotate mode: if multiple
+   * categories are pending, the next claimed item MUST NOT be in the same
+   * category as the last posted item. If only one category is pending,
+   * claim from it.
+   */
+  claimNextPostForPosting(
+    mode: 'oldest_first' | 'rotate_categories',
+    lastPostedCategoryId: number | null,
+  ): PostQueueItem | null {
+    const db = getDb();
+    const now = nowIso();
+    let claimedId: number | null = null;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      let id: number | undefined;
+      if (mode === 'rotate_categories') {
+        // Distinct categories present in pending rows (null counts as its own bucket).
+        const distinct = db
+          .prepare(
+            "SELECT DISTINCT category_id FROM post_queue WHERE status = 'pending'",
+          )
+          .all() as { category_id: number | null }[];
+        const distinctCount = distinct.length;
+        if (distinctCount > 1) {
+          // Prefer oldest item whose category differs from last posted.
+          let row: { id?: number } | undefined;
+          if (lastPostedCategoryId === null) {
+            row = db
+              .prepare(
+                "SELECT id FROM post_queue WHERE status = 'pending' AND category_id IS NOT NULL ORDER BY created_at ASC, id ASC LIMIT 1",
+              )
+              .get() as { id?: number } | undefined;
+          } else {
+            row = db
+              .prepare(
+                "SELECT id FROM post_queue WHERE status = 'pending' AND (category_id IS NULL OR category_id != ?) ORDER BY created_at ASC, id ASC LIMIT 1",
+              )
+              .get(lastPostedCategoryId) as { id?: number } | undefined;
+          }
+          // If no alternative bucket somehow (shouldn't happen given distinctCount>1
+          // but be safe), fall back to oldest pending.
+          if (!row?.id) {
+            row = db
+              .prepare(
+                "SELECT id FROM post_queue WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1",
+              )
+              .get() as { id?: number } | undefined;
+          }
+          id = row?.id;
+        } else {
+          // Only one category in pending → just oldest.
+          const row = db
+            .prepare(
+              "SELECT id FROM post_queue WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1",
+            )
+            .get() as { id?: number } | undefined;
+          id = row?.id;
+        }
+      } else {
+        const row = db
+          .prepare(
+            "SELECT id FROM post_queue WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1",
+          )
+          .get() as { id?: number } | undefined;
+        id = row?.id;
+      }
       if (id != null) {
         const result = db
           .prepare(

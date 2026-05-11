@@ -194,6 +194,53 @@ appends a context block automatically.
 
 ---
 
+## Categories and content sources
+
+The app organizes sources into **categories** (e.g. *General News*, *Tech
+News*) and treats them as the unit of variety when posting.
+
+- **Default categories** seeded on first run: *General News* and *Tech
+  News*. You can rename, recolor, disable, or add more in
+  *Settings → Categories*.
+- **Every content source** has a URL + (optional) label + category +
+  enabled flag. Use the row editor in *Settings → Content sources* to add
+  / edit / remove sources.
+- **Every generated queue item inherits the category** of the source it
+  came from. You can see the badge in the dashboard's Posting Timeline
+  and on the Queue page.
+- The legacy `source_urls` textarea is automatically migrated on first
+  run: each URL is split, a heuristic picks *Tech News* (for URLs
+  containing words like `tech`, `ai`, `github`, `developer`, `engineering`,
+  …) or *General News* otherwise, and rows are inserted into
+  `content_sources`. The original column is preserved for back-compat.
+
+## Queue posting strategy
+
+The *Queue posting strategy* control in *Settings* picks how the next
+post is chosen from the queue:
+
+- **Rotate categories** *(default)* — if more than one category is
+  pending, the next post will **not** be from the same category as the
+  previous post. If only one category is pending, posting continues from
+  that category.
+- **Oldest first** — posts strictly in queue order regardless of
+  category.
+
+Example, with last posted = *General News* and queue:
+
+```
+General News  A1
+General News  A2
+Tech News     B1
+Tech News     B2
+```
+
+*Rotate categories* will pick `B1` next, then `A1`, then `B2`, then `A2`.
+With only one category left, it keeps posting from that category.
+
+The scheduler also uses this order to assign `scheduled_for` times, so
+the dashboard's *Upcoming* table reflects the category-rotated sequence.
+
 ## Source URL extraction
 
 Each generation can attach one source URL as context for Gemini. The

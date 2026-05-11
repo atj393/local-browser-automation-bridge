@@ -3,8 +3,13 @@ import type {
   UpdateSettingsBody,
   SourceMode,
   BatchRefillMode,
+  QueueSelectionMode,
 } from '@lbab/shared';
-import { SOURCE_MODES, BATCH_REFILL_MODES } from '@lbab/shared';
+import {
+  SOURCE_MODES,
+  BATCH_REFILL_MODES,
+  QUEUE_SELECTION_MODES,
+} from '@lbab/shared';
 import { getDb } from '../db/database.js';
 import { nowIso } from '../utils/date.js';
 
@@ -23,12 +28,15 @@ interface SettingsRow {
   source_mode: string;
   last_source_index: number;
   last_source_url: string | null;
+  last_source_id: number | null;
   batch_min_interval_seconds: number;
   batch_max_interval_seconds: number;
   batch_refill_mode: string;
   next_batch_run_at: string | null;
   last_batch_generated_at: string | null;
   is_batch_generation_running: number;
+  queue_selection_mode: string;
+  last_posted_category_id: number | null;
   next_run_at: string | null;
   created_at: string;
   updated_at: string;
@@ -58,6 +66,12 @@ function asBatchRefillMode(value: string): BatchRefillMode {
     : 'random_delay';
 }
 
+function asQueueSelectionMode(value: string): QueueSelectionMode {
+  return (QUEUE_SELECTION_MODES as readonly string[]).includes(value)
+    ? (value as QueueSelectionMode)
+    : 'rotate_categories';
+}
+
 function rowToSettings(row: SettingsRow): AutomationSettings {
   return {
     isRunning: !!row.is_running,
@@ -79,6 +93,9 @@ function rowToSettings(row: SettingsRow): AutomationSettings {
     nextBatchRunAt: row.next_batch_run_at,
     lastBatchGeneratedAt: row.last_batch_generated_at,
     isBatchGenerationRunning: !!row.is_batch_generation_running,
+    queueSelectionMode: asQueueSelectionMode(row.queue_selection_mode),
+    lastPostedCategoryId: row.last_posted_category_id,
+    lastSourceId: row.last_source_id,
     nextRunAt: row.next_run_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -103,6 +120,7 @@ export const settingsService = {
            auto_submit_writer = ?, writer_url_pattern = ?, reader_url_pattern = ?,
            source_urls = ?, source_mode = ?,
            batch_min_interval_seconds = ?, batch_max_interval_seconds = ?, batch_refill_mode = ?,
+           queue_selection_mode = ?,
            updated_at = ?
        WHERE id = 1`,
     ).run(
@@ -119,8 +137,17 @@ export const settingsService = {
       body.batchMinIntervalSeconds,
       body.batchMaxIntervalSeconds,
       body.batchRefillMode,
+      body.queueSelectionMode,
       nowIso(),
     );
+    return this.get();
+  },
+
+  setLastPostedCategoryId(categoryId: number | null): AutomationSettings {
+    const db = getDb();
+    db.prepare(
+      'UPDATE automation_settings SET last_posted_category_id = ?, updated_at = ? WHERE id = 1',
+    ).run(categoryId, nowIso());
     return this.get();
   },
   setRunning(isRunning: boolean): AutomationSettings {
@@ -139,11 +166,13 @@ export const settingsService = {
     );
     return this.get();
   },
-  setSourceProgress(index: number, url: string | null): AutomationSettings {
+  setSourceProgress(sourceId: number, url: string | null): AutomationSettings {
     const db = getDb();
     db.prepare(
-      'UPDATE automation_settings SET last_source_index = ?, last_source_url = ?, updated_at = ? WHERE id = 1',
-    ).run(index, url, nowIso());
+      `UPDATE automation_settings
+         SET last_source_id = ?, last_source_url = ?, last_source_index = ?, updated_at = ?
+       WHERE id = 1`,
+    ).run(sourceId, url, sourceId, nowIso());
     return this.get();
   },
   setNextBatchRunAt(value: string | null): AutomationSettings {

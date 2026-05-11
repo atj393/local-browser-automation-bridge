@@ -4,6 +4,7 @@ import {
   BATCH_REFILL_MODES,
   POSTS_PER_GENERATION_MAX,
   POSTS_PER_GENERATION_MIN,
+  QUEUE_SELECTION_MODES,
   SOURCE_MODES,
 } from '@lbab/shared';
 import { settingsService } from '../services/settingsService.js';
@@ -39,6 +40,7 @@ const updateSchema = z
     batchMinIntervalSeconds: z.number().int().min(10),
     batchMaxIntervalSeconds: z.number().int().min(10).max(86_400),
     batchRefillMode: z.enum(BATCH_REFILL_MODES),
+    queueSelectionMode: z.enum(QUEUE_SELECTION_MODES),
   })
   .refine((d) => d.maxIntervalSeconds >= d.minIntervalSeconds, {
     message: 'maxIntervalSeconds must be greater than or equal to minIntervalSeconds',
@@ -91,6 +93,14 @@ settingsRouter.put('/api/settings', (req, res) => {
         'Settings interval changed while stopped; cleared stale scheduled_for values.',
       );
     }
+  }
+
+  // Queue selection mode changed → rebuild the schedule so dashboard
+  // timeline reflects the new posting order. (Claim-time decision uses
+  // the new mode regardless, but the timeline display reads scheduled_for.)
+  if (before.queueSelectionMode !== updated.queueSelectionMode && updated.isRunning) {
+    logService.info('Queue selection mode changed; schedule recalculated.');
+    postScheduler.onScheduleAffectingChange('queue-selection-mode-changed');
   }
 
   // Batch interval / refill-mode change → re-arm batch scheduler.

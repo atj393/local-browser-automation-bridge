@@ -12,6 +12,8 @@ import { automationRouter } from './routes/automation.routes.js';
 import { queueRouter } from './routes/queue.routes.js';
 import { logsRouter } from './routes/logs.routes.js';
 import { sourcesRouter } from './routes/sources.routes.js';
+import { categoriesRouter } from './routes/categories.routes.js';
+import { contentSourcesRouter } from './routes/contentSources.routes.js';
 import { testPagesRouter } from './routes/testPages.routes.js';
 
 export function createApp() {
@@ -29,6 +31,8 @@ export function createApp() {
   app.use(queueRouter);
   app.use(logsRouter);
   app.use(sourcesRouter);
+  app.use(categoriesRouter);
+  app.use(contentSourcesRouter);
   app.use(testPagesRouter);
 
   app.get('/', (_req, res) => {

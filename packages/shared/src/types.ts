@@ -1,9 +1,75 @@
-import type { POST_STATUSES, LOG_LEVELS, SOURCE_MODES, BATCH_REFILL_MODES } from './constants.js';
+import type {
+  POST_STATUSES,
+  LOG_LEVELS,
+  SOURCE_MODES,
+  BATCH_REFILL_MODES,
+  QUEUE_SELECTION_MODES,
+} from './constants.js';
 
 export type PostStatus = typeof POST_STATUSES[number];
 export type LogLevel = typeof LOG_LEVELS[number];
 export type SourceMode = typeof SOURCE_MODES[number];
 export type BatchRefillMode = typeof BATCH_REFILL_MODES[number];
+export type QueueSelectionMode = typeof QUEUE_SELECTION_MODES[number];
+
+export interface Category {
+  id: number;
+  name: string;
+  slug: string;
+  description: string | null;
+  color: string | null;
+  isEnabled: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContentSource {
+  id: number;
+  url: string;
+  label: string | null;
+  categoryId: number;
+  categoryName: string;
+  categorySlug: string;
+  categoryColor: string | null;
+  isEnabled: boolean;
+  sortOrder: number;
+  lastUsedAt: string | null;
+  lastFetchStatus: string | null;
+  lastFetchError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateCategoryBody {
+  name: string;
+  description?: string | null;
+  color?: string | null;
+}
+
+export interface UpdateCategoryBody {
+  name?: string;
+  description?: string | null;
+  color?: string | null;
+  isEnabled?: boolean;
+  sortOrder?: number;
+}
+
+export interface CreateContentSourceBody {
+  url: string;
+  label?: string | null;
+  categoryId: number;
+  isEnabled?: boolean;
+  sortOrder?: number;
+}
+
+export interface UpdateContentSourceBody {
+  url?: string;
+  label?: string | null;
+  categoryId?: number;
+  isEnabled?: boolean;
+  sortOrder?: number;
+}
 
 export interface AutomationSettings {
   isRunning: boolean;
@@ -25,6 +91,9 @@ export interface AutomationSettings {
   nextBatchRunAt: string | null;
   lastBatchGeneratedAt: string | null;
   isBatchGenerationRunning: boolean;
+  queueSelectionMode: QueueSelectionMode;
+  lastPostedCategoryId: number | null;
+  lastSourceId: number | null;
   nextRunAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -44,6 +113,7 @@ export interface UpdateSettingsBody {
   batchMinIntervalSeconds: number;
   batchMaxIntervalSeconds: number;
   batchRefillMode: BatchRefillMode;
+  queueSelectionMode: QueueSelectionMode;
 }
 
 export interface PostQueueItem {
@@ -52,7 +122,10 @@ export interface PostQueueItem {
   content: string;
   rawJson: string | null;
   status: PostStatus;
+  sourceId: number | null;
   sourceUrl: string | null;
+  categoryId: number | null;
+  categoryName: string | null;
   scheduledFor: string | null;
   postedAt: string | null;
   failedAt: string | null;
@@ -79,6 +152,8 @@ export interface NextPostSummary {
   status: PostStatus;
   scheduledFor: string | null;
   sourceUrl: string | null;
+  categoryId: number | null;
+  categoryName: string | null;
 }
 
 export interface QueueTimelineEntry {
@@ -89,6 +164,15 @@ export interface QueueTimelineEntry {
   countdownSeconds: number | null;
   position: number;
   sourceUrl: string | null;
+  categoryId: number | null;
+  categoryName: string | null;
+}
+
+export interface CategoryQueueCount {
+  categoryId: number | null;
+  categoryName: string;
+  pendingCount: number;
+  postedCount: number;
 }
 
 export type SchedulerState =
@@ -170,6 +254,12 @@ export interface StatusResponse {
   postScheduler: PostSchedulerStatus;
   batchScheduler: BatchSchedulerStatus;
   queue: QueueCountsSummary;
+
+  // Category-aware fields.
+  queueSelectionMode: QueueSelectionMode;
+  lastPostedCategoryId: number | null;
+  lastPostedCategoryName: string | null;
+  categoryQueueCounts: CategoryQueueCount[];
 }
 
 export type TabRole = 'writer' | 'reader';

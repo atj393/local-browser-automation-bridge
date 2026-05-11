@@ -71,6 +71,7 @@ export function QueueTable({ items, onRetry, onSkip, onPostNow, onMarkPosted, bu
             <th>ID</th>
             <th>#</th>
             <th>Content</th>
+            <th>Category</th>
             <th>Source</th>
             <th>Status</th>
             <th>Scheduled</th>
@@ -90,6 +91,13 @@ export function QueueTable({ items, onRetry, onSkip, onPostNow, onMarkPosted, bu
                 {it.queuePosition ?? <span className="muted">—</span>}
               </td>
               <td style={{ maxWidth: 400 }}>{it.content}</td>
+              <td style={{ fontSize: 12 }}>
+                {it.categoryName ? (
+                  <span className="badge muted">{it.categoryName}</span>
+                ) : (
+                  <span className="muted">—</span>
+                )}
+              </td>
               <td className="mono" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }} title={it.sourceUrl ?? ''}>
                 {it.sourceUrl ?? <span className="muted">—</span>}
               </td>

@@ -180,11 +180,19 @@ export const promptService = {
       );
     }
 
-    const { batchId, items } = queueService.insertBatch(cleaned, { sourceUrl: ctx.url });
+    const { batchId, items } = queueService.insertBatch(cleaned, {
+      sourceId: ctx.sourceId,
+      sourceUrl: ctx.url,
+      categoryId: ctx.categoryId,
+      categoryName: ctx.categoryName ?? (ctx.sourceId ? null : 'Uncategorized'),
+    });
     logService.info('Queue items inserted.', {
       batchId,
-      count: items.length,
+      itemCount: items.length,
+      sourceId: ctx.sourceId,
       sourceUrl: ctx.url,
+      categoryId: ctx.categoryId,
+      categoryName: ctx.categoryName,
     });
     // The batch scheduler is the single owner of the post-schedule hook
     // after a successful batch (it calls postScheduler.onScheduleAffectingChange).

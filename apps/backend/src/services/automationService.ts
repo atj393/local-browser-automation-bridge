@@ -172,6 +172,8 @@ async function postClaimed(item: PostQueueItem): Promise<PostNextResult> {
       });
     } else if (fresh && fresh.status === 'posting') {
       queueService.setStatus(item.id, 'posted', { postedAt: nowIso() });
+      // Remember the category for the next category-rotation decision.
+      settingsService.setLastPostedCategoryId(item.categoryId);
     } else {
       logService.warn(
         'Writer returned success but DB row is in an unexpected status; not overwriting.',
@@ -230,14 +232,23 @@ export const automationService = {
     }
     isPosting = true;
     try {
-      logService.info('Post claim requested (oldest pending).');
-      const claimed = queueService.claimNextPendingPost();
+      const settings = settingsService.get();
+      logService.info('Post claim requested.', {
+        mode: settings.queueSelectionMode,
+        lastPostedCategoryId: settings.lastPostedCategoryId,
+      });
+      const claimed = queueService.claimNextPostForPosting(
+        settings.queueSelectionMode,
+        settings.lastPostedCategoryId,
+      );
       if (!claimed) {
         return { success: false, noPending: true, error: 'No pending items.' };
       }
       logService.info('Post item claimed.', {
         postId: claimed.id,
         previousStatus: 'pending',
+        categoryId: claimed.categoryId,
+        categoryName: claimed.categoryName,
       });
       return await postClaimed(claimed);
     } finally {

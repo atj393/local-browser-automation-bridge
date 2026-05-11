@@ -6,12 +6,15 @@ import type {
   PostSchedulerStatus,
   BatchSchedulerStatus,
   QueueCountsSummary,
+  CategoryQueueCount,
   SchedulerState,
 } from '@lbab/shared';
 import { settingsService } from '../services/settingsService.js';
 import { queueService } from '../services/queueService.js';
+import { categoryService } from '../services/categoryService.js';
 import { logService } from '../services/logService.js';
 import { extensionGateway } from '../websocket/extensionGateway.js';
+import { getDb } from '../db/database.js';
 
 export const statusRouter = Router();
 
@@ -86,6 +89,32 @@ function buildScheduleWarning(minS: number, maxS: number): string | null {
     return 'Your maximum interval is more than 1 hour. The next post may be scheduled much later.';
   }
   return null;
+}
+
+interface CountRow {
+  category_id: number | null;
+  category_name: string | null;
+  pending: number;
+  posted: number;
+}
+
+function buildCategoryQueueCounts(): CategoryQueueCount[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT category_id, category_name,
+              SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+              SUM(CASE WHEN status = 'posted'  THEN 1 ELSE 0 END) AS posted
+       FROM post_queue
+       GROUP BY category_id, category_name`,
+    )
+    .all() as unknown as CountRow[];
+  return rows.map((r) => ({
+    categoryId: r.category_id ?? null,
+    categoryName: r.category_name ?? 'Uncategorized',
+    pendingCount: Number(r.pending) || 0,
+    postedCount: Number(r.posted) || 0,
+  }));
 }
 
 function buildAutomationMessage(args: {
@@ -253,6 +282,8 @@ statusRouter.get('/api/status', (_req, res) => {
         status: firstPending.status,
         scheduledFor: firstPending.scheduledFor,
         sourceUrl: firstPending.sourceUrl,
+        categoryId: firstPending.categoryId,
+        categoryName: firstPending.categoryName,
       }
     : null;
 
@@ -268,6 +299,8 @@ statusRouter.get('/api/status', (_req, res) => {
     countdownSeconds: settings.isRunning ? countdownFromIso(p.scheduledFor) : null,
     position: i + 1,
     sourceUrl: p.sourceUrl,
+    categoryId: p.categoryId,
+    categoryName: p.categoryName,
   }));
 
   const queue: QueueCountsSummary = {
@@ -324,6 +357,13 @@ statusRouter.get('/api/status', (_req, res) => {
     maxIntervalLabel: postSchedulerStatus.maxIntervalLabel,
     scheduleWarning: postSchedulerStatus.scheduleWarning,
     queueTimeline,
+    queueSelectionMode: settings.queueSelectionMode,
+    lastPostedCategoryId: settings.lastPostedCategoryId,
+    lastPostedCategoryName:
+      settings.lastPostedCategoryId != null
+        ? categoryService.getById(settings.lastPostedCategoryId)?.name ?? null
+        : null,
+    categoryQueueCounts: buildCategoryQueueCounts(),
     automationMessage: buildAutomationMessage({
       isRunning: settings.isRunning,
       pendingCount: counts.pending,
