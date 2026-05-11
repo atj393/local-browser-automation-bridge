@@ -87,4 +87,18 @@ export const TIMEOUTS = {
   postToWriterMs: 30_000,
 } as const;
 
+/**
+ * If the extension has not sent a CONTENT_READY heartbeat for a tab
+ * within this window, the backend considers it stale and the dashboard
+ * shows a degraded state. Content scripts heartbeat every 30s so 90s
+ * tolerates two missed beats.
+ */
+export const CONTENT_READY_TTL_MS = 90_000;
+
+/** How often the content scripts re-announce themselves while alive. */
+export const CONTENT_READY_HEARTBEAT_MS = 30_000;
+
+/** Background alarm period (in minutes) for rediscovery sweep. */
+export const BG_REDISCOVERY_PERIOD_MIN = 0.5;
+
 export const MAX_CONTENT_LENGTH = 280;

@@ -20,4 +20,7 @@ export type {
   CreateContentSourceBody,
   UpdateContentSourceBody,
   UpdateSettingsBody,
+  ExtensionConnectionStatus,
+  TabConnectionStatus,
+  TabReadiness,
 } from '@lbab/shared';

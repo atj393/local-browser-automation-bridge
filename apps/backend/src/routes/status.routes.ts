@@ -273,6 +273,7 @@ statusRouter.get('/api/status', (_req, res) => {
   const writerConnected = extensionGateway.hasWriter();
   const readerConnected = extensionGateway.hasReader();
   const extensionConnected = extensionGateway.isConnected();
+  const connectionStatus = extensionGateway.getStatus();
 
   const firstPending = pending[0] ?? null;
   const nextPost: NextPostSummary | null = firstPending
@@ -376,6 +377,9 @@ statusRouter.get('/api/status', (_req, res) => {
     postScheduler: postSchedulerStatus,
     batchScheduler: batchSchedulerStatus,
     queue,
+    extensionStatus: connectionStatus.extension,
+    readerStatus: connectionStatus.reader,
+    writerStatus: connectionStatus.writer,
   };
   res.json(body);
 });

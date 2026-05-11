@@ -17,10 +17,45 @@ declare global {
   interface Window {
     __lbab_gemini_reader_loaded_v2__?: boolean;
     __local_browser_bridge_gemini_reader_loaded__?: boolean;
+    __lbab_reader_heartbeat_started__?: boolean;
+    __lbab_reader_url_watcher_started__?: boolean;
   }
 }
 
 const READER_INIT_FLAG = '__lbab_gemini_reader_loaded_v2__';
+const HEARTBEAT_MS = 30_000;
+const URL_WATCH_MS = 1500;
+
+function sendReady(opts: { heartbeat?: boolean; reason?: string } = {}): void {
+  try {
+    chrome.runtime.sendMessage(
+      {
+        type: 'CONTENT_READY',
+        role: 'reader',
+        url: location.href,
+        heartbeat: !!opts.heartbeat,
+        timestamp: Date.now(),
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          // Background may be asleep; this is expected. No log spam.
+          return;
+        }
+        if (opts.heartbeat) {
+          console.log('[lbab/gemini-reader] heartbeat CONTENT_READY sent', response);
+        } else {
+          console.log(
+            '[lbab/gemini-reader] CONTENT_READY sent',
+            opts.reason ?? 'init',
+            response,
+          );
+        }
+      },
+    );
+  } catch (err) {
+    console.warn('[lbab/gemini-reader] CONTENT_READY threw', err);
+  }
+}
 
 if ((window as unknown as Record<string, boolean>)[READER_INIT_FLAG]) {
   console.warn('[lbab/gemini-reader] duplicate content script load ignored');
@@ -36,12 +71,14 @@ if ((window as unknown as Record<string, boolean>)[READER_INIT_FLAG]) {
   // 1) Register the listener BEFORE any async work so background
   //    can reach this content script as soon as it appears.
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    console.log('[lbab/gemini-reader] message received', message?.type, location.href);
-
     if (message?.type === 'PING_CONTENT') {
+      // Respond synchronously — MV3 service worker may have just woken up
+      // and is racing the ping against tab handler registration.
       sendResponse({ ok: true, role: 'reader', url: location.href });
       return false;
     }
+
+    console.log('[lbab/gemini-reader] message received', message?.type, location.href);
 
     if (message?.type === 'GENERATE_NEXT_BATCH_CONTENT') {
       const { prompt } = message.payload as { prompt: string; batchSize: number };
@@ -60,23 +97,38 @@ if ((window as unknown as Record<string, boolean>)[READER_INIT_FLAG]) {
   });
   console.log('[lbab/gemini-reader] message listener registered', location.href);
 
-  // 2) Tell background we are ready. Use a callback so we surface failures.
-  try {
-    chrome.runtime.sendMessage(
-      { type: 'CONTENT_READY', role: 'reader', url: location.href },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          console.warn(
-            '[lbab/gemini-reader] CONTENT_READY failed',
-            chrome.runtime.lastError.message,
-          );
-          return;
-        }
-        console.log('[lbab/gemini-reader] CONTENT_READY sent', response);
-      },
-    );
-  } catch (err) {
-    console.warn('[lbab/gemini-reader] CONTENT_READY threw', err);
+  // 2) Initial CONTENT_READY.
+  sendReady({ reason: 'init' });
+
+  // 3) Re-announce on visibility/focus/pageshow — these fire when a
+  //    sleeping tab gets attention again and we want to recover quickly
+  //    instead of waiting for the next 30s heartbeat tick.
+  window.addEventListener('focus', () => sendReady({ reason: 'focus' }));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') sendReady({ reason: 'visible' });
+  });
+  window.addEventListener('pageshow', () => sendReady({ reason: 'pageshow' }));
+
+  // 4) Periodic heartbeat. setInterval inside a content script keeps
+  //    running as long as the tab is alive — independent of the
+  //    service worker lifecycle.
+  if (!window.__lbab_reader_heartbeat_started__) {
+    window.__lbab_reader_heartbeat_started__ = true;
+    setInterval(() => sendReady({ heartbeat: true }), HEARTBEAT_MS);
+  }
+
+  // 5) SPA URL-change watcher. Gemini swaps history without reloading;
+  //    we want the background to learn about the new URL right away.
+  if (!window.__lbab_reader_url_watcher_started__) {
+    window.__lbab_reader_url_watcher_started__ = true;
+    let lastUrl = location.href;
+    setInterval(() => {
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
+        console.log('[lbab/gemini-reader] navigation detected', lastUrl);
+        sendReady({ reason: 'navigation' });
+      }
+    }, URL_WATCH_MS);
   }
 }
 

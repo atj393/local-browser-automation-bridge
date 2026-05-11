@@ -184,6 +184,42 @@ declare global {
   interface Window {
     __lbab_x_writer_loaded_v2__?: boolean;
     __local_browser_bridge_x_writer_loaded__?: boolean;
+    __lbab_writer_heartbeat_started__?: boolean;
+    __lbab_writer_url_watcher_started__?: boolean;
+  }
+}
+
+const WRITER_HEARTBEAT_MS = 30_000;
+const WRITER_URL_WATCH_MS = 1500;
+
+function sendWriterReady(opts: { heartbeat?: boolean; reason?: string } = {}): void {
+  try {
+    chrome.runtime.sendMessage(
+      {
+        type: 'CONTENT_READY',
+        role: 'writer',
+        url: location.href,
+        heartbeat: !!opts.heartbeat,
+        timestamp: Date.now(),
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          // Background worker may be asleep — expected, do not log spam.
+          return;
+        }
+        if (opts.heartbeat) {
+          console.log('[lbab/x-writer] heartbeat CONTENT_READY sent', response);
+        } else {
+          console.log(
+            '[lbab/x-writer] CONTENT_READY sent',
+            opts.reason ?? 'init',
+            response,
+          );
+        }
+      },
+    );
+  } catch (err) {
+    console.warn('[lbab/x-writer] CONTENT_READY threw', err);
   }
 }
 
@@ -223,12 +259,13 @@ function init(): void {
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    console.log('[lbab/x-writer] message received', message?.type, location.href);
-
     if (message?.type === 'PING_CONTENT') {
+      // Respond synchronously — service worker may have just woken up.
       sendResponse({ ok: true, role: 'writer', url: location.href });
       return false;
     }
+
+    console.log('[lbab/x-writer] message received', message?.type, location.href);
 
     if (message?.type === 'POST_TO_WRITER_CONTENT') {
       const payload = (message.payload ?? {}) as {
@@ -299,22 +336,35 @@ function init(): void {
   });
   console.log('[lbab/x-writer] message listener registered', location.href);
 
-  try {
-    chrome.runtime.sendMessage(
-      { type: 'CONTENT_READY', role: 'writer', url: location.href },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          console.warn(
-            '[lbab/x-writer] CONTENT_READY failed',
-            chrome.runtime.lastError.message,
-          );
-          return;
-        }
-        console.log('[lbab/x-writer] CONTENT_READY sent', response);
-      },
-    );
-  } catch (err) {
-    console.warn('[lbab/x-writer] CONTENT_READY threw', err);
+  // Initial announce.
+  sendWriterReady({ reason: 'init' });
+
+  // Recover from idle / tab-switch quickly without waiting for the next
+  // heartbeat tick.
+  window.addEventListener('focus', () => sendWriterReady({ reason: 'focus' }));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') sendWriterReady({ reason: 'visible' });
+  });
+  window.addEventListener('pageshow', () => sendWriterReady({ reason: 'pageshow' }));
+
+  // Periodic heartbeat — runs while the tab is alive regardless of
+  // service-worker sleep state.
+  if (!window.__lbab_writer_heartbeat_started__) {
+    window.__lbab_writer_heartbeat_started__ = true;
+    setInterval(() => sendWriterReady({ heartbeat: true }), WRITER_HEARTBEAT_MS);
+  }
+
+  // X is an SPA; URL changes without a reload. Re-announce on nav.
+  if (!window.__lbab_writer_url_watcher_started__) {
+    window.__lbab_writer_url_watcher_started__ = true;
+    let lastUrl = location.href;
+    setInterval(() => {
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
+        console.log('[lbab/x-writer] navigation detected', lastUrl);
+        sendWriterReady({ reason: 'navigation' });
+      }
+    }, WRITER_URL_WATCH_MS);
   }
 }
 

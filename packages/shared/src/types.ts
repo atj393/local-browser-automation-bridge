@@ -175,6 +175,39 @@ export interface CategoryQueueCount {
   postedCount: number;
 }
 
+/**
+ * Health for the long-lived extension websocket connection. `stale` is
+ * true when the connection looks open but no message has been received
+ * recently. `lastSeenAt` is the most recent message timestamp.
+ */
+export interface ExtensionConnectionStatus {
+  connected: boolean;
+  lastSeenAt: string | null;
+  stale: boolean;
+  message: string;
+}
+
+export type TabReadiness =
+  | 'ready'
+  | 'stale'
+  | 'url-found'
+  | 'disconnected';
+
+/**
+ * Health for a single reader/writer tab. Distinguishes between
+ * "ready" (content script heartbeat is fresh), "stale" (was ready,
+ * heartbeat went silent), "url-found" (a matching tab exists but the
+ * content script never answered), and "disconnected".
+ */
+export interface TabConnectionStatus {
+  readiness: TabReadiness;
+  connected: boolean;
+  stale: boolean;
+  url: string | null;
+  lastSeenAt: string | null;
+  message: string;
+}
+
 export type SchedulerState =
   | 'idle'
   | 'running'
@@ -260,6 +293,12 @@ export interface StatusResponse {
   lastPostedCategoryId: number | null;
   lastPostedCategoryName: string | null;
   categoryQueueCounts: CategoryQueueCount[];
+
+  // Detailed connection health (so the dashboard can distinguish
+  // "URL found but content script not responding" from "disconnected").
+  extensionStatus: ExtensionConnectionStatus;
+  readerStatus: TabConnectionStatus;
+  writerStatus: TabConnectionStatus;
 }
 
 export type TabRole = 'writer' | 'reader';

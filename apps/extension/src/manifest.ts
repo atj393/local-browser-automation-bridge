@@ -23,7 +23,7 @@ export default defineManifest({
     service_worker: 'src/background/serviceWorker.ts',
     type: 'module',
   },
-  permissions: ['tabs', 'activeTab'],
+  permissions: ['tabs', 'activeTab', 'alarms', 'scripting'],
   host_permissions: [
     'http://localhost:*/*',
     'https://x.com/*',

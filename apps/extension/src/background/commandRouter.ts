@@ -6,6 +6,7 @@ import type {
   TabRole,
 } from '@lbab/shared';
 import { tabRegistry } from './tabRegistry.js';
+import { rediscoverContentTabs } from './rediscovery.js';
 
 function sendToTab<TResp>(tabId: number, message: unknown): Promise<TResp> {
   return new Promise<TResp>((resolve, reject) => {
@@ -40,6 +41,44 @@ async function pingTab(tabId: number): Promise<boolean> {
   }
 }
 
+/**
+ * Resolve a usable ready tab for `role`, attempting recovery if the
+ * cached ready tab fails its ping. Returns the live tabId or null.
+ */
+async function resolveLiveTab(role: TabRole): Promise<{ tabId: number; url: string } | null> {
+  // 1) Prefer a fresh (within TTL) ready tab — usually nothing to ping.
+  let candidate = tabRegistry.getMostRecentFresh(role) ?? tabRegistry.getMostRecent(role);
+  if (candidate && (await pingTab(candidate.tabId))) {
+    tabRegistry.markPingSuccess(candidate.tabId, candidate.role, candidate.url);
+    return { tabId: candidate.tabId, url: candidate.url };
+  }
+  if (candidate) {
+    tabRegistry.markPingFailure(
+      candidate.tabId,
+      candidate.role,
+      candidate.url,
+      'ping returned no response',
+    );
+  }
+
+  // 2) Sweep: registry may have stale or missing entries after SW sleep.
+  await rediscoverContentTabs('command-router-' + role);
+
+  // 3) Try again after the sweep — rediscovery may have promoted a
+  //    candidate to ready via successful ping.
+  candidate = tabRegistry.getMostRecentFresh(role) ?? tabRegistry.getMostRecent(role);
+  if (candidate && (await pingTab(candidate.tabId))) {
+    tabRegistry.markPingSuccess(candidate.tabId, candidate.role, candidate.url);
+    return { tabId: candidate.tabId, url: candidate.url };
+  }
+  return null;
+}
+
+const READER_NOT_READY =
+  'Reader tab is not ready. The extension is reconnecting; refresh Gemini or http://localhost:4000/test/llm if this persists.';
+const WRITER_NOT_READY =
+  'Writer tab is not ready. The extension is reconnecting; refresh X.com or http://localhost:4000/test/writer if this persists.';
+
 // Defense-in-depth: refuse to send POST_TO_WRITER_CONTENT twice for the same
 // operationId, even if the backend (or a buggy WS reconnect) emits two
 // commands with the same id. Cleared after the response or on error.
@@ -50,19 +89,9 @@ export const commandRouter = {
     requestId: string,
     payload: GenerateNextBatchPayload,
   ): Promise<GenerateNextBatchResultPayload> {
-    const tab = tabRegistry.getMostRecent('reader');
+    const tab = await resolveLiveTab('reader');
     if (!tab) {
-      return {
-        success: false,
-        error:
-          'No ready reader tab. Open Gemini or http://localhost:4000/test/llm and refresh; wait for "CONTENT_READY sent" in the page console.',
-      };
-    }
-    if (!(await pingTab(tab.tabId))) {
-      return {
-        success: false,
-        error: `Reader tab ${tab.tabId} did not respond to ping. Refresh the reader page so the content script reloads.`,
-      };
+      return { success: false, error: READER_NOT_READY };
     }
     try {
       return await sendToTab<GenerateNextBatchResultPayload>(tab.tabId, {
@@ -98,14 +127,13 @@ export const commandRouter = {
       };
     }
 
-    const tab = tabRegistry.getMostRecent('writer');
+    const tab = await resolveLiveTab('writer');
     if (!tab) {
       return {
         success: false,
         postId: payload.postId,
         operationId,
-        error:
-          'No ready writer tab. Open X.com or http://localhost:4000/test/writer and refresh; wait for "CONTENT_READY sent" in the page console.',
+        error: WRITER_NOT_READY,
       };
     }
 
@@ -120,15 +148,6 @@ export const commandRouter = {
       tab.tabId,
     );
 
-    if (!(await pingTab(tab.tabId))) {
-      return {
-        success: false,
-        postId: payload.postId,
-        operationId,
-        error: `Writer tab ${tab.tabId} did not respond to ping. Refresh the writer page so the content script reloads.`,
-      };
-    }
-
     if (operationId) activeWriterOperations.add(operationId);
     try {
       const resp = await sendToTab<PostToWriterResultPayload>(tab.tabId, {
@@ -136,7 +155,6 @@ export const commandRouter = {
         requestId,
         payload,
       });
-      // Echo operationId back if content script forgot to.
       return { ...resp, operationId: resp.operationId ?? operationId };
     } catch (err) {
       return {

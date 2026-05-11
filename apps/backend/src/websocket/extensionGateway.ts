@@ -8,19 +8,35 @@ import type {
   PostToWriterResultPayload,
   TabRoleAvailablePayload,
   TabRoleRemovedPayload,
+  TabRoleCandidatePayload,
+  ExtensionConnectionStatus,
+  TabConnectionStatus,
+  TabReadiness,
 } from '@lbab/shared';
-import { TIMEOUTS, WS_PATH } from '@lbab/shared';
+import { CONTENT_READY_TTL_MS, TIMEOUTS, WS_PATH } from '@lbab/shared';
 import { requestRegistry } from './requestRegistry.js';
 import { logService } from '../services/logService.js';
 import { newRequestId } from '../utils/ids.js';
 
+interface TabState {
+  tabId: number | null;
+  url: string | null;
+  /** True after CONTENT_READY/TAB_ROLE_AVAILABLE; false after TAB_ROLE_CANDIDATE. */
+  contentScriptReady: boolean;
+  lastSeenAt: number | null;
+  lastError: string | null;
+}
+
+function emptyTabState(): TabState {
+  return { tabId: null, url: null, contentScriptReady: false, lastSeenAt: null, lastError: null };
+}
+
 class ExtensionGateway {
   private wss: WebSocketServer | null = null;
   private socket: WebSocket | null = null;
-  private writerTabId: number | null = null;
-  private readerTabId: number | null = null;
-  private writerUrl: string | null = null;
-  private readerUrl: string | null = null;
+  private extensionLastSeenAt: number | null = null;
+  private writer: TabState = emptyTabState();
+  private reader: TabState = emptyTabState();
 
   attach(server: HttpServer): void {
     this.wss = new WebSocketServer({ server, path: WS_PATH });
@@ -38,6 +54,7 @@ class ExtensionGateway {
       }
     }
     this.socket = ws;
+    this.extensionLastSeenAt = Date.now();
     logService.info('Extension connected.');
 
     ws.on('message', (data) => this.onMessage(data.toString()));
@@ -45,6 +62,12 @@ class ExtensionGateway {
     ws.on('error', (err) => {
       logService.warn('WebSocket error', { error: String(err) });
     });
+
+    // After a backend restart, the extension may already have ready
+    // tabs but we (the backend) lost that state. Ask it to rediscover
+    // and re-announce them so the dashboard recovers without a manual
+    // tab refresh.
+    setTimeout(() => this.requestRediscovery('backend-startup'), 50);
   }
 
   private onClose(): void {
@@ -52,10 +75,10 @@ class ExtensionGateway {
       logService.info('Extension disconnected.');
     }
     this.socket = null;
-    this.writerTabId = null;
-    this.readerTabId = null;
-    this.writerUrl = null;
-    this.readerUrl = null;
+    // Mark tabs as not-ready but keep the URLs so the dashboard can show
+    // "previously connected" rather than wiping everything.
+    this.writer.contentScriptReady = false;
+    this.reader.contentScriptReady = false;
     requestRegistry.rejectAll('Extension disconnected before responding.');
   }
 
@@ -71,6 +94,7 @@ class ExtensionGateway {
       logService.warn('Received malformed ws message.');
       return;
     }
+    this.extensionLastSeenAt = Date.now();
     switch (msg.type) {
       case 'REGISTER_EXTENSION':
         this.send({
@@ -79,27 +103,40 @@ class ExtensionGateway {
           payload: { ok: true },
         });
         logService.info('Extension registered.', msg.payload);
+        // Ask the extension to re-scan tabs so we recover after a
+        // backend restart even when the extension's WS reconnected
+        // before this onConnection ran.
+        this.requestRediscovery('register-extension');
         break;
       case 'TAB_ROLE_AVAILABLE': {
         const p = msg.payload as TabRoleAvailablePayload;
-        if (p.role === 'writer') {
-          this.writerTabId = p.tabId;
-          this.writerUrl = p.url;
-        } else if (p.role === 'reader') {
-          this.readerTabId = p.tabId;
-          this.readerUrl = p.url;
-        }
+        const target = p.role === 'writer' ? this.writer : this.reader;
+        target.tabId = p.tabId;
+        target.url = p.url;
+        target.contentScriptReady = true;
+        target.lastSeenAt = Date.now();
+        target.lastError = null;
         logService.info(`Tab role available: ${p.role}`, p);
+        break;
+      }
+      case 'TAB_ROLE_CANDIDATE': {
+        const p = msg.payload as TabRoleCandidatePayload;
+        const target = p.role === 'writer' ? this.writer : this.reader;
+        target.tabId = p.tabId;
+        target.url = p.url;
+        target.contentScriptReady = false;
+        target.lastError = p.error ?? 'Content script not responding';
+        // Don't bump lastSeenAt — we don't have a live content script.
+        logService.warn(`Tab role candidate (content script not ready): ${p.role}`, p);
         break;
       }
       case 'TAB_ROLE_REMOVED': {
         const p = msg.payload as TabRoleRemovedPayload;
-        if (p.role === 'writer' && this.writerTabId === p.tabId) {
-          this.writerTabId = null;
-          this.writerUrl = null;
-        } else if (p.role === 'reader' && this.readerTabId === p.tabId) {
-          this.readerTabId = null;
-          this.readerUrl = null;
+        const target = p.role === 'writer' ? this.writer : this.reader;
+        if (target.tabId === p.tabId) {
+          target.tabId = null;
+          target.url = null;
+          target.contentScriptReady = false;
         }
         logService.info(`Tab role removed: ${p.role}`, p);
         break;
@@ -130,15 +167,110 @@ class ExtensionGateway {
     return true;
   }
 
+  /** Ask the extension to rediscover reader/writer tabs. */
+  requestRediscovery(reason: string): void {
+    this.send({
+      type: 'REDISCOVER_TABS',
+      requestId: 'rediscover-' + Date.now(),
+      payload: { reason },
+    });
+  }
+
   isConnected(): boolean {
     return !!this.socket && this.socket.readyState === WebSocket.OPEN;
   }
 
+  /** A tab is "live" only when content script ready AND heartbeat fresh. */
+  private isTabLive(state: TabState): boolean {
+    if (!state.contentScriptReady || state.tabId == null) return false;
+    if (state.lastSeenAt == null) return false;
+    return Date.now() - state.lastSeenAt < CONTENT_READY_TTL_MS;
+  }
+
   hasWriter(): boolean {
-    return this.writerTabId !== null;
+    return this.isTabLive(this.writer);
   }
   hasReader(): boolean {
-    return this.readerTabId !== null;
+    return this.isTabLive(this.reader);
+  }
+
+  /** Detailed status for the dashboard. */
+  getStatus(): {
+    extension: ExtensionConnectionStatus;
+    reader: TabConnectionStatus;
+    writer: TabConnectionStatus;
+  } {
+    return {
+      extension: this.buildExtensionStatus(),
+      reader: this.buildTabStatus('reader', this.reader),
+      writer: this.buildTabStatus('writer', this.writer),
+    };
+  }
+
+  private buildExtensionStatus(): ExtensionConnectionStatus {
+    const connected = this.isConnected();
+    const lastSeenAt = this.extensionLastSeenAt
+      ? new Date(this.extensionLastSeenAt).toISOString()
+      : null;
+    const stale = connected
+      ? this.extensionLastSeenAt != null &&
+        Date.now() - this.extensionLastSeenAt > CONTENT_READY_TTL_MS
+      : false;
+    let message: string;
+    if (!connected) {
+      message = 'Extension is not connected. Make sure the extension is loaded in Chrome.';
+    } else if (stale) {
+      message = 'Extension is connected but has been quiet for a while.';
+    } else {
+      message = 'Extension is connected.';
+    }
+    return { connected, lastSeenAt, stale, message };
+  }
+
+  private buildTabStatus(
+    role: 'reader' | 'writer',
+    state: TabState,
+  ): TabConnectionStatus {
+    const lastSeenIso = state.lastSeenAt ? new Date(state.lastSeenAt).toISOString() : null;
+    const live = this.isTabLive(state);
+    const stale =
+      state.contentScriptReady &&
+      state.lastSeenAt != null &&
+      Date.now() - state.lastSeenAt >= CONTENT_READY_TTL_MS;
+
+    let readiness: TabReadiness;
+    let message: string;
+    const roleLabel = role === 'reader' ? 'Reader' : 'Writer';
+
+    if (!this.isConnected()) {
+      readiness = 'disconnected';
+      message = `${roleLabel} tab is not connected. Extension is offline.`;
+    } else if (live) {
+      readiness = 'ready';
+      message = `${roleLabel} tab is connected.`;
+    } else if (stale) {
+      readiness = 'stale';
+      message = `${roleLabel} tab was previously connected but heartbeat is stale. The extension is trying to rediscover it.`;
+    } else if (state.tabId != null && state.url) {
+      // URL matched but content script never reported ready / dropped ready.
+      readiness = 'url-found';
+      message = `${roleLabel} tab found but content script is not responding. Refresh the tab if this does not recover automatically.`;
+    } else {
+      readiness = 'disconnected';
+      message =
+        role === 'reader'
+          ? 'Reader tab is not connected. Open Gemini or http://localhost:4000/test/llm.'
+          : 'Writer tab is not connected. Open X.com or http://localhost:4000/test/writer.';
+    }
+
+    return {
+      readiness,
+      connected: readiness === 'ready',
+      stale,
+      url: state.url,
+      lastSeenAt: lastSeenIso,
+      message,
+    };
   }
 
   async generateNextBatch(payload: GenerateNextBatchPayload): Promise<GenerateNextBatchResultPayload> {
@@ -146,9 +278,15 @@ class ExtensionGateway {
       throw new Error('Extension is not connected.');
     }
     if (!this.hasReader()) {
-      throw new Error(
-        'Reader tab is not connected. Open Gemini or the local LLM test page and refresh the page.',
-      );
+      // Try to recover before failing the user: ask the extension to
+      // rediscover and give it a brief window to respond.
+      this.requestRediscovery('generateNextBatch-no-reader');
+      await this.waitForReader(2000);
+      if (!this.hasReader()) {
+        throw new Error(
+          'Reader tab is not ready. Open Gemini or the local LLM test page and refresh the page if this persists.',
+        );
+      }
     }
     const requestId = newRequestId();
     const promise = requestRegistry.create<GenerateNextBatchResultPayload>(
@@ -165,9 +303,13 @@ class ExtensionGateway {
       throw new Error('Extension is not connected.');
     }
     if (!this.hasWriter()) {
-      throw new Error(
-        'Writer tab is not connected. Open X.com/home or the local writer test page and refresh the page.',
-      );
+      this.requestRediscovery('postToWriter-no-writer');
+      await this.waitForWriter(2000);
+      if (!this.hasWriter()) {
+        throw new Error(
+          'Writer tab is not ready. Open X.com/home or the local writer test page and refresh the page if this persists.',
+        );
+      }
     }
     const requestId = newRequestId();
     const promise = requestRegistry.create<PostToWriterResultPayload>(
@@ -183,6 +325,26 @@ class ExtensionGateway {
     });
     this.send({ type: 'POST_TO_WRITER', requestId, payload });
     return promise;
+  }
+
+  private waitForReader(timeoutMs: number): Promise<void> {
+    return this.waitFor(() => this.hasReader(), timeoutMs);
+  }
+
+  private waitForWriter(timeoutMs: number): Promise<void> {
+    return this.waitFor(() => this.hasWriter(), timeoutMs);
+  }
+
+  private waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const tick = (): void => {
+        if (check()) return resolve();
+        if (Date.now() - start >= timeoutMs) return resolve();
+        setTimeout(tick, 100);
+      };
+      tick();
+    });
   }
 }
 

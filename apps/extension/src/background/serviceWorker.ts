@@ -6,14 +6,41 @@ import type {
   TabRoleRemovedPayload,
   TabRole,
 } from '@lbab/shared';
+import { BG_REDISCOVERY_PERIOD_MIN } from '@lbab/shared';
 import { backendSocket } from './websocketClient.js';
 import { commandRouter } from './commandRouter.js';
 import { classifyUrl, tabRegistry } from './tabRegistry.js';
+import { rediscoverContentTabs } from './rediscovery.js';
+
+const ALARM_NAME = 'lbab-heartbeat';
 
 backendSocket.setHandler(handleBackendMessage);
 backendSocket.start();
 
-scanExistingTabs();
+// Service worker startup: scan current tabs and try to re-establish
+// reader/writer state without waiting for a page refresh.
+void rediscoverContentTabs('service-worker-startup');
+
+chrome.runtime.onStartup?.addListener(() => {
+  void rediscoverContentTabs('runtime-onStartup');
+});
+
+chrome.runtime.onInstalled?.addListener(() => {
+  void rediscoverContentTabs('runtime-onInstalled');
+});
+
+// Periodic rediscovery sweep. chrome.alarms survives service-worker
+// sleep cycles, which a plain setInterval does not.
+try {
+  chrome.alarms.create(ALARM_NAME, { periodInMinutes: BG_REDISCOVERY_PERIOD_MIN });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === ALARM_NAME) {
+      void rediscoverContentTabs('alarm-heartbeat');
+    }
+  });
+} catch (err) {
+  console.warn('[lbab/background] chrome.alarms unavailable', err);
+}
 
 chrome.tabs.onCreated.addListener((tab) => {
   if (tab.id === undefined) return;
@@ -23,6 +50,12 @@ chrome.tabs.onCreated.addListener((tab) => {
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status === 'complete' || info.url) {
     if (tab.url) registerCandidate(tabId, tab.url);
+    if (info.status === 'complete' && classifyUrl(tab.url)) {
+      // Tab finished loading on a matching URL — make sure we have a
+      // fresh ready state. Content script will normally re-announce on
+      // load, but this covers the race where it ran before our SW woke.
+      void rediscoverContentTabs('tab-complete-' + tabId);
+    }
   }
 });
 
@@ -34,14 +67,20 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
   tabRegistry.touch(tabId);
 });
 
+chrome.windows?.onFocusChanged.addListener(() => {
+  void rediscoverContentTabs('window-focus-changed');
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return false;
 
   if (message.type === 'WS_OPENED') {
-    // Re-announce all known *ready* tabs once the socket is up.
+    // Re-announce all known *ready* tabs once the socket is up, then
+    // sweep for new candidates.
     for (const info of tabRegistry.listReady()) {
       sendTabAvailable(info.role, info.tabId, info.url);
     }
+    void rediscoverContentTabs('ws-opened');
     return false;
   }
 
@@ -49,7 +88,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const tabId = sender.tab.id;
     const role = message.role as TabRole;
     const url = message.url ?? sender.tab.url ?? '';
-    console.log('[lbab/background] CONTENT_READY received', role, tabId, url);
+    if (!message.heartbeat) {
+      console.log('[lbab/background] CONTENT_READY received', role, tabId, url);
+    }
     if (role === 'writer' || role === 'reader') {
       tabRegistry.markReady(tabId, role, url);
       sendTabAvailable(role, tabId, url);
@@ -61,17 +102,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-async function scanExistingTabs(): Promise<void> {
-  try {
-    const tabs = await chrome.tabs.query({});
-    for (const tab of tabs) {
-      if (tab.id !== undefined && tab.url) registerCandidate(tab.id, tab.url);
-    }
-  } catch (err) {
-    console.warn('[lbab/bg] scanExistingTabs failed', err);
-  }
-}
-
 /**
  * URL-based candidate registration. Does NOT announce to backend until
  * CONTENT_READY arrives. If a tab navigates away from a matching URL,
@@ -79,7 +109,7 @@ async function scanExistingTabs(): Promise<void> {
  */
 function registerCandidate(tabId: number, url: string): void {
   const before = tabRegistry.list().find((t) => t.tabId === tabId);
-  const wasReady = before?.ready ?? false;
+  const wasReady = before?.contentScriptReady ?? false;
   const beforeRole = before?.role;
   const next = tabRegistry.upsertCandidate(tabId, url);
   if (!next && before && wasReady && beforeRole) {
@@ -89,7 +119,7 @@ function registerCandidate(tabId: number, url: string): void {
 
 function unregisterTab(tabId: number): void {
   const removed = tabRegistry.remove(tabId);
-  if (removed && removed.ready) sendTabRemoved(removed.role, tabId);
+  if (removed && removed.contentScriptReady) sendTabRemoved(removed.role, tabId);
 }
 
 function sendTabAvailable(role: TabRole, tabId: number, url: string): void {
@@ -118,6 +148,11 @@ async function handleBackendMessage(msg: WsBaseMessage): Promise<void> {
       for (const info of tabRegistry.listReady()) {
         sendTabAvailable(info.role, info.tabId, info.url);
       }
+      // And rediscover — backend may have just restarted and lost state.
+      void rediscoverContentTabs('register-extension-ack');
+      break;
+    case 'REDISCOVER_TABS':
+      void rediscoverContentTabs('backend-request');
       break;
     case 'GENERATE_NEXT_BATCH': {
       const payload = msg.payload as GenerateNextBatchPayload;
@@ -145,5 +180,6 @@ async function handleBackendMessage(msg: WsBaseMessage): Promise<void> {
   }
 }
 
-// Suppress unused variable warning for classifyUrl import resolution.
+// Keep the classifyUrl import alive — used indirectly via tabRegistry,
+// kept here so editor "remove unused import" doesn't break the type.
 void classifyUrl;

@@ -520,6 +520,24 @@ DOM automation is rejected, not as a substitute for the real API.
 | X composer is filled but nothing was posted | **Expected** when *Auto-submit writer* is off (the safe default). Switch to the X tab, review the content, and click *Post* manually. |
 | Source URL fetch failed | Backend logs a warning (`Source fetch failed; falling back to prompt-only`) and continues generation without external context. Check the URL in your browser. |
 | Source URL was rejected | Localhost / private-network URLs are blocked to prevent SSRF. Use a public URL. |
+| Reader / Writer disconnected after some time, even though the extension is connected | See *Reader/Writer disconnected after some time* below. The extension now self-heals via a heartbeat and backend rediscovery; in most cases the dashboard recovers without refreshing the tab. |
+
+### Reader/Writer disconnected after some time
+
+Chrome Manifest V3 service workers can sleep, and the extension's in-memory tab registry disappears with them. To recover automatically, the extension now uses:
+
+- **Content-script heartbeat** — `geminiReader.ts` / `xWriter.ts` send `CONTENT_READY` on load and again every 30 seconds, plus on `focus`, `visibilitychange`, `pageshow`, and SPA URL changes.
+- **Background rediscovery** — when the service worker wakes (`onStartup`, `onInstalled`, WebSocket opens, backend re-registers, `chrome.alarms` heartbeat, focus changes, command routing), it queries tabs matching reader/writer URL patterns, sends `PING_CONTENT`, and re-announces ready tabs to the backend.
+- **Backend `REDISCOVER_TABS`** — on backend restart, when the extension re-registers, the backend tells the extension to rescan. Backend tab state has a 90 s TTL; stale tabs are shown as *Stale* in the dashboard while rediscovery runs.
+- **Safe re-injection** — when ping fails on a matching tab, the background tries `chrome.scripting.executeScript` once (requires the `scripting` permission, added to manifest).
+- **Dashboard readiness states** — Reader/Writer cards now show `Ready` / `Stale` / `Not responding` / `Disconnected` with an inline hint.
+
+If, despite all of that, the dashboard still says *Not responding* or *Disconnected*:
+
+1. Click the reload icon for the extension at `chrome://extensions`. (After reloading the extension, content scripts in already-open tabs lose their Chrome runtime context and **do** need a one-time page refresh — this is a Chrome MV3 limitation, not an app bug.)
+2. Refresh the reader/writer tab.
+3. Open the extension service-worker console and look for `[lbab/background] rediscovering content tabs:` log lines.
+4. Open the reader/writer page console and look for `heartbeat CONTENT_READY sent`.
 
 ### Expected console logs
 
