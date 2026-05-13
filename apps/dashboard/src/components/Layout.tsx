@@ -10,6 +10,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <nav>
           <NavLink to="/" end className={navClass}>Dashboard</NavLink>
           <NavLink to="/settings" className={navClass}>Settings</NavLink>
+          <NavLink to="/profile" className={navClass}>Personal Profile</NavLink>
           <NavLink to="/queue" className={navClass}>Queue</NavLink>
           <NavLink to="/logs" className={navClass}>Logs</NavLink>
         </nav>

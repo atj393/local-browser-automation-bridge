@@ -303,6 +303,57 @@ export interface StatusResponse {
 
 export type TabRole = 'writer' | 'reader';
 
+/**
+ * Per-user identity, preferences, and writing rules used to shape
+ * generated posts. Persisted as JSON so the schema can evolve without
+ * a migration. `isEnabled` is the master switch: when false the
+ * prompt builder ignores the profile entirely.
+ */
+export interface PersonalProfileHashtagPreferences {
+  enabled: boolean;
+  min: number;
+  max: number;
+  preferred: string[];
+  avoid: string[];
+}
+
+export interface PersonalProfileTone {
+  primary: string[];
+  avoid: string[];
+}
+
+export interface PersonalProfile {
+  whoAmI: string;
+  shortBio: string;
+  likes: string[];
+  dislikes: string[];
+  avoidTopics: string[];
+  tone: PersonalProfileTone;
+  geographicPreferences: string[];
+  topicInterests: string[];
+  values: string[];
+  writingRules: string[];
+  hashtagPreferences: PersonalProfileHashtagPreferences;
+  languagePreference: string;
+  customInstructions: string;
+  /**
+   * Per-profile safety rules. The backend always appends a fixed
+   * non-negotiable safety block on top of these.
+   */
+  safetyRules: string[];
+}
+
+export interface PersonalProfileResponse {
+  isEnabled: boolean;
+  profile: PersonalProfile;
+  updatedAt: string;
+}
+
+export interface UpdatePersonalProfileRequest {
+  isEnabled?: boolean;
+  profile?: Partial<PersonalProfile>;
+}
+
 export interface NormalizedItem {
   content: string;
   raw: unknown;

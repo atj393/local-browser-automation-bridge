@@ -23,4 +23,9 @@ export type {
   ExtensionConnectionStatus,
   TabConnectionStatus,
   TabReadiness,
+  PersonalProfile,
+  PersonalProfileTone,
+  PersonalProfileHashtagPreferences,
+  PersonalProfileResponse,
+  UpdatePersonalProfileRequest,
 } from '@lbab/shared';

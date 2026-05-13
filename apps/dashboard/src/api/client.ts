@@ -11,6 +11,8 @@ import type {
   UpdateCategoryBody,
   CreateContentSourceBody,
   UpdateContentSourceBody,
+  PersonalProfileResponse,
+  UpdatePersonalProfileRequest,
 } from './types.js';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -113,4 +115,12 @@ export const api = {
     request<{ ok: boolean; item: ContentSource }>('PUT', `/api/content-sources/${id}`, body),
   deleteContentSource: (id: number) =>
     request<{ ok: boolean }>('DELETE', `/api/content-sources/${id}`),
+
+  // Personal profile
+  getPersonalProfile: () =>
+    request<PersonalProfileResponse>('GET', '/api/personal-profile'),
+  updatePersonalProfile: (body: UpdatePersonalProfileRequest) =>
+    request<PersonalProfileResponse>('PUT', '/api/personal-profile', body),
+  resetPersonalProfile: () =>
+    request<PersonalProfileResponse>('POST', '/api/personal-profile/reset'),
 };

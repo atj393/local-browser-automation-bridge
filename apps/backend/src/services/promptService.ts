@@ -3,10 +3,28 @@ import { jsonExtractionService } from './jsonExtractionService.js';
 import { queueService } from './queueService.js';
 import { settingsService } from './settingsService.js';
 import { sourceService, type SourceContext } from './sourceService.js';
+import { personalProfileService } from './personalProfileService.js';
 import { logService } from './logService.js';
 import { MAX_CONTENT_LENGTH } from '@lbab/shared';
 
-const PLACEHOLDER_KEYS = ['{{batchSize}}', '{{postsPerGeneration}}', '{{sourceContext}}', '{{sourceUrl}}', '{{date}}'];
+const PLACEHOLDER_KEYS = [
+  '{{batchSize}}',
+  '{{postsPerGeneration}}',
+  '{{sourceContext}}',
+  '{{sourceUrl}}',
+  '{{categoryName}}',
+  '{{personalProfile}}',
+  '{{date}}',
+];
+
+const PERSONAL_PROFILE_RULES = `Rules for using the personal profile:
+- Use the profile as writing guidance, not as facts to repeat verbatim.
+- Align topic framing with the profile when relevant.
+- Do not force personal views into unrelated topics.
+- Do not attack religious, ethnic, caste, nationality, gender, or other protected groups.
+- If avoided topics are listed, avoid those topics unless the source is specifically about them and a neutral factual mention is necessary.
+- Maintain the requested tone.
+- Keep posts natural and personal, not robotic.`;
 
 function buildSourceContextBlock(ctx: SourceContext): string {
   if (!ctx.url) {
@@ -32,23 +50,31 @@ function buildPrompt(
   template: string,
   postsPerGeneration: number,
   ctx: SourceContext,
+  personalProfile: string,
 ): string {
   const today = new Date().toISOString().slice(0, 10);
   const sourceUrl = ctx.url ?? '(none)';
   const sourceContext = buildSourceContextBlock(ctx);
+  const categoryName = ctx.categoryName ?? '(uncategorized)';
+  // When the profile is disabled or empty we still substitute the
+  // placeholder so the template does not show literal `{{personalProfile}}`.
+  const profileBlock = personalProfile.trim().length
+    ? personalProfile.trim()
+    : '(No personal profile provided.)';
 
   const replaced = template
     .replaceAll('{{batchSize}}', String(postsPerGeneration))
     .replaceAll('{{postsPerGeneration}}', String(postsPerGeneration))
     .replaceAll('{{sourceUrl}}', sourceUrl)
     .replaceAll('{{sourceContext}}', sourceContext)
+    .replaceAll('{{categoryName}}', categoryName)
+    .replaceAll('{{personalProfile}}', profileBlock)
     .replaceAll('{{date}}', today);
 
   const hasAnyPlaceholder = PLACEHOLDER_KEYS.some((k) => template.includes(k));
-  if (hasAnyPlaceholder) return replaced;
-
-  // No placeholders in user prompt; append a context block automatically.
-  return `${replaced.trimEnd()}
+  let body = hasAnyPlaceholder
+    ? replaced
+    : `${replaced.trimEnd()}
 
 ---
 Generation count: ${postsPerGeneration}
@@ -57,6 +83,20 @@ Source/context:
 ${sourceContext}
 
 Return valid JSON only.`;
+
+  // If the template never referenced {{personalProfile}} but we DO have a
+  // profile to apply, append it. This keeps existing custom prompts
+  // working without forcing users to edit their template.
+  if (personalProfile.trim().length && !template.includes('{{personalProfile}}')) {
+    body = `${body.trimEnd()}
+
+---
+${profileBlock}
+
+${PERSONAL_PROFILE_RULES}`;
+  }
+
+  return body;
 }
 
 interface CleanedItem {
@@ -91,13 +131,21 @@ export const promptService = {
     );
 
     const ctx = await sourceService.getNextSourceContext();
-    const finalPrompt = buildPrompt(settings.llmPrompt, postsPerGeneration, ctx);
+    const personalProfile = personalProfileService.getPromptContext();
+    const personalProfileUsed = personalProfile.length > 0;
+    const finalPrompt = buildPrompt(
+      settings.llmPrompt,
+      postsPerGeneration,
+      ctx,
+      personalProfile,
+    );
 
     logService.info('Batch request: sending prompt to Gemini reader.', {
       postsPerGeneration,
       sourceUrl: ctx.url,
       sourceTextChars: ctx.text.length,
       finalPromptChars: finalPrompt.length,
+      personalProfileUsed,
     });
 
     const result = await extensionGateway.generateNextBatch({

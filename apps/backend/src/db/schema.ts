@@ -92,4 +92,12 @@ CREATE TABLE IF NOT EXISTS content_sources (
 CREATE INDEX IF NOT EXISTS idx_content_sources_enabled_sort ON content_sources (is_enabled, sort_order);
 CREATE INDEX IF NOT EXISTS idx_content_sources_category ON content_sources (category_id);
 CREATE INDEX IF NOT EXISTS idx_content_sources_url ON content_sources (url);
+
+CREATE TABLE IF NOT EXISTS personal_profile (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  profile_json TEXT NOT NULL,
+  is_enabled INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;

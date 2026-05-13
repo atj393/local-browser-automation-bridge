@@ -394,6 +394,49 @@ In-memory timers are lost on backend restart. The startup hook resets
 dashboard does not show a fake countdown after a crash. Click *Start
 automation* again to resume.
 
+### Personal Profile
+
+The dashboard ships with a **Personal Profile** page (sidebar link) where
+you describe who you are, the tone you write in, topics you care about,
+avoided topics, geographic context, values, hashtag preferences, and any
+free-form custom instructions. When the profile is enabled, it is
+injected into the Gemini prompt so generated posts sound like you instead
+of generic AI prose.
+
+- Stored locally in SQLite, in the `personal_profile` table as a single
+  JSON blob. Not sent anywhere except the Gemini page through the local
+  browser automation flow.
+- Disabled by default — opt in with the *Use personal profile when
+  generating posts* checkbox.
+- The prompt template supports a `{{personalProfile}}` placeholder. If
+  it is present in your custom prompt, the profile block replaces it;
+  otherwise the backend appends the profile section automatically.
+- Avoided topics are treated as **content-avoidance guidance**, not as
+  instructions to attack anyone. The backend always appends a fixed
+  safety boundary block: no hate, no harassment, no broad negative
+  claims about religion, ethnicity, caste, nationality, gender, or
+  other protected groups. Strong opinions are okay; abuse is not.
+- A *Fill sample profile* button on the page seeds the form with an
+  example (Indian developer, AI/startups, India/Germany context) so you
+  can see the shape; it is **not** the default — fresh installs start
+  empty and disabled.
+
+Example minimal profile after editing:
+
+```
+Who am I:         Indian software developer interested in AI and automation.
+Likes:            Pro AI-based development; Pro startup mindset
+Avoid topics:     Religious comparison; Hate or harassment
+Tone (primary):   thoughtful; personal; mildly sarcastic; sharp but respectful
+Geographic:       India; Tamil Nadu; Germany
+Topics:           AI; LLMs; startups; developer tools
+Hashtags:         1–3 per post; preferred: #AI, #TamilNadu, #Germany
+```
+
+To check whether a generated batch used the profile, look at the most
+recent *Batch request* log entry on the Logs page — it includes
+`personalProfileUsed: true|false`.
+
 ### Posting interval
 
 In *Settings → Posting interval*, set the minimum and maximum delay using

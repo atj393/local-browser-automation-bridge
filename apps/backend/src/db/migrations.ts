@@ -157,4 +157,49 @@ export function runMigrations(): void {
   // ---- Seed + legacy migration ----
   seedDefaultCategories();
   migrateLegacySourceUrls();
+  seedDefaultPersonalProfile();
+}
+
+/**
+ * Insert an empty disabled personal profile row on first run. The
+ * profile JSON shape mirrors `PersonalProfile` in `@lbab/shared`.
+ * Disabled by default — users opt-in from the dashboard.
+ */
+function seedDefaultPersonalProfile(): void {
+  const db = getDb();
+  const existing = db
+    .prepare('SELECT id FROM personal_profile WHERE id = 1')
+    .get();
+  if (existing) return;
+  const defaultProfile = {
+    whoAmI: '',
+    shortBio: '',
+    likes: [],
+    dislikes: [],
+    avoidTopics: [],
+    tone: { primary: [], avoid: [] },
+    geographicPreferences: [],
+    topicInterests: [],
+    values: [],
+    writingRules: [],
+    hashtagPreferences: {
+      enabled: true,
+      min: 1,
+      max: 3,
+      preferred: [],
+      avoid: [],
+    },
+    languagePreference: 'English',
+    customInstructions: '',
+    safetyRules: [
+      'Do not generate hate, harassment, or insults against protected groups.',
+      'Avoid offensive religious comparisons.',
+      'Keep opinions strong but respectful.',
+    ],
+  };
+  const now = nowIso();
+  db.prepare(
+    `INSERT INTO personal_profile (id, profile_json, is_enabled, created_at, updated_at)
+     VALUES (1, ?, 0, ?, ?)`,
+  ).run(JSON.stringify(defaultProfile), now, now);
 }

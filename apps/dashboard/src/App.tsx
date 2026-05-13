@@ -4,6 +4,7 @@ import { DashboardPage } from './pages/DashboardPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { QueuePage } from './pages/QueuePage.js';
 import { LogsPage } from './pages/LogsPage.js';
+import { PersonalProfilePage } from './pages/PersonalProfilePage.js';
 
 export function App() {
   return (
@@ -13,6 +14,7 @@ export function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/queue" element={<QueuePage />} />
         <Route path="/logs" element={<LogsPage />} />
+        <Route path="/profile" element={<PersonalProfilePage />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Layout>
