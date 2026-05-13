@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { POST_STATUSES, type PostStatus } from '@lbab/shared';
 import { queueService } from '../services/queueService.js';
 import { automationService } from '../services/automationService.js';
+import { settingsService } from '../services/settingsService.js';
+import { postScheduler } from '../scheduler/postScheduler.js';
 import { logService } from '../services/logService.js';
 import { nowIso } from '../utils/date.js';
 
@@ -114,6 +116,12 @@ queueRouter.post('/api/posts/:id/post-now', async (req, res) => {
   }
   try {
     const result = await automationService.postById(id);
+    // After a manual post (success OR failure), recompute the remaining
+    // schedule from now so the next post is `now + random(min,max)` and
+    // not the stale scheduled_for from the previous timeline.
+    if (settingsService.get().isRunning) {
+      postScheduler.onScheduleAffectingChange('manual-post-now');
+    }
     if (!result.success) {
       return res.status(502).json({ ok: false, error: result.error, postId: id });
     }

@@ -53,6 +53,12 @@ automationRouter.post('/api/batches/generate', async (_req, res) => {
 automationRouter.post('/api/posts/post-next', async (_req, res) => {
   try {
     const result = await automationService.postNext();
+    // After a manual post, recompute the remaining schedule from now so
+    // the next post countdown reflects the configured interval, not the
+    // stale scheduled_for from the previous timeline.
+    if (settingsService.get().isRunning) {
+      postScheduler.onScheduleAffectingChange('manual-post-next');
+    }
     if (result.noPending) {
       return res.status(404).json({ ok: false, error: 'No pending items.' });
     }

@@ -66,6 +66,12 @@ settingsRouter.put('/api/settings', (req, res) => {
     .filter((u) => u.length > 0);
   const before = settingsService.get();
   const updated = settingsService.update({ ...parsed.data, sourceUrls: cleanedUrls });
+  const humanRange = `${updated.minIntervalSeconds}s–${updated.maxIntervalSeconds}s (${Math.round(updated.minIntervalSeconds / 60)}–${Math.round(updated.maxIntervalSeconds / 60)} min)`;
+  logService.info('Posting interval saved.', {
+    minIntervalSeconds: updated.minIntervalSeconds,
+    maxIntervalSeconds: updated.maxIntervalSeconds,
+    humanRange,
+  });
   logService.info('Settings updated.', {
     autoSubmitWriter: updated.autoSubmitWriter,
     postsPerGeneration: updated.postsPerGeneration,

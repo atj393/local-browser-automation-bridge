@@ -51,10 +51,15 @@ class PostScheduler {
    * Recompute scheduled_for for every pending item starting from `now`.
    * The first item is at now + random(min,max); each subsequent one is
    * previous + random(min,max). next_run_at is the first scheduled time.
+   *
+   * IMPORTANT: the rotation input is the *oldest-first by created_at*
+   * order, NOT the current scheduled_for order, otherwise a re-rotation
+   * driven by a different lastPostedCategoryId would inherit stale
+   * sequencing from the prior rotation.
    */
   private recomputeFullSchedule(reason: string): void {
     const settings = settingsService.get();
-    const items = queueService.listPending();
+    const items = queueService.listPendingByCreatedAt();
     if (items.length === 0) {
       settingsService.setNextRunAt(null);
       logService.info('Queue schedule recalculated: empty queue.', { reason });
@@ -68,22 +73,59 @@ class PostScheduler {
       settings.queueSelectionMode,
     );
     const updates: { id: number; scheduledFor: string }[] = [];
-    let cursorMs = Date.now();
+    const delaysSeconds: number[] = [];
+    const startMs = Date.now();
+    let cursorMs = startMs;
     for (const item of ordered) {
-      cursorMs += getRandomDelay(settings.minIntervalSeconds, settings.maxIntervalSeconds);
+      const delayMs = getRandomDelay(
+        settings.minIntervalSeconds,
+        settings.maxIntervalSeconds,
+      );
+      delaysSeconds.push(Math.round(delayMs / 1000));
+      cursorMs += delayMs;
       updates.push({ id: item.id, scheduledFor: new Date(cursorMs).toISOString() });
     }
+
+    // Guard: first delay must fall inside [minIntervalSeconds, maxIntervalSeconds].
+    const firstDelay = delaysSeconds[0] ?? 0;
+    if (
+      firstDelay < settings.minIntervalSeconds ||
+      firstDelay > settings.maxIntervalSeconds
+    ) {
+      logService.error(
+        'Schedule bug detected: first delay outside configured range.',
+        {
+          reason,
+          firstDelay,
+          minIntervalSeconds: settings.minIntervalSeconds,
+          maxIntervalSeconds: settings.maxIntervalSeconds,
+        },
+      );
+      // Self-heal: regenerate just the first delay inside the configured range.
+      const correctedFirstMs = getRandomDelay(
+        settings.minIntervalSeconds,
+        settings.maxIntervalSeconds,
+      );
+      const correctedFirstScheduled = new Date(startMs + correctedFirstMs).toISOString();
+      if (updates[0]) updates[0].scheduledFor = correctedFirstScheduled;
+      delaysSeconds[0] = Math.round(correctedFirstMs / 1000);
+    }
+
     queueService.setSchedule(updates);
     const first = updates[0];
     const last = updates[updates.length - 1];
     if (first) settingsService.setNextRunAt(first.scheduledFor);
-    logService.info('Queue schedule recalculated.', {
+    logService.info('Post schedule recalculated.', {
       reason,
+      now: new Date(startMs).toISOString(),
+      minIntervalSeconds: settings.minIntervalSeconds,
+      maxIntervalSeconds: settings.maxIntervalSeconds,
       itemCount: updates.length,
-      minInterval: settings.minIntervalSeconds,
-      maxInterval: settings.maxIntervalSeconds,
-      firstScheduled: first?.scheduledFor,
-      lastScheduled: last?.scheduledFor,
+      firstScheduledFor: first?.scheduledFor,
+      lastScheduledFor: last?.scheduledFor,
+      nextRunAt: first?.scheduledFor ?? null,
+      firstDelaySeconds: delaysSeconds[0] ?? null,
+      generatedDelaysSeconds: delaysSeconds.slice(0, 10),
       queueSelectionMode: settings.queueSelectionMode,
       lastPostedCategoryId: settings.lastPostedCategoryId,
     });
@@ -95,16 +137,23 @@ class PostScheduler {
    */
   private scheduleAppendOnly(): void {
     const settings = settingsService.get();
-    const items = queueService.listPending().filter((i) => i.scheduledFor === null);
+    // New (unscheduled) items first, in created_at order for stable rotation input.
+    const items = queueService
+      .listPendingByCreatedAt()
+      .filter((i) => i.scheduledFor === null);
     if (items.length === 0) return;
     const anchor = queueService.latestScheduledFor();
     let cursorMs = anchor ? Date.parse(anchor) : Date.now();
     if (Number.isNaN(cursorMs)) cursorMs = Date.now();
-    // Seed the rotation with the last scheduled (already-ordered) item's
-    // category so new items continue the alternation cleanly.
+    // Seed the rotation with the last *scheduled* item's category so new
+    // items continue the alternation cleanly. listPending() is now ordered
+    // by scheduled_for ASC, so the last entry with a scheduled_for is the
+    // latest-scheduled item.
     const lastScheduledItem = (() => {
-      const pending = queueService.listPending().filter((i) => i.scheduledFor !== null);
-      return pending.length ? pending[pending.length - 1] : null;
+      const scheduled = queueService
+        .listPending()
+        .filter((i) => i.scheduledFor !== null);
+      return scheduled.length ? scheduled[scheduled.length - 1] : null;
     })();
     const rotationSeedCategory =
       lastScheduledItem?.categoryId ?? settings.lastPostedCategoryId ?? null;

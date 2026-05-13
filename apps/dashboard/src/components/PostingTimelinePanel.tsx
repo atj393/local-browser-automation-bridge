@@ -88,6 +88,12 @@ export function PostingTimelinePanel({ status }: { status: StatusResponse | null
         {status.automationMessage}
       </div>
 
+      <div className="muted" style={{ fontSize: 11, marginBottom: 12 }}>
+        The first upcoming post is always scheduled at a random delay within
+        the configured interval. Later rows are cumulative (each post is
+        scheduled relative to the previous one).
+      </div>
+
       {status.nextPost ? (
         <div style={{ background: '#f7f8fc', border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
           <div className="label" style={{ color: 'var(--muted)', fontSize: 12, textTransform: 'uppercase' }}>Next post</div>

@@ -413,10 +413,40 @@ export const queueService = {
   },
 
   /**
-   * Returns all unposted (pending) items in stable order. Used by the
-   * scheduler to compute / re-compute the posting plan.
+   * Returns all unposted (pending) items in **posting order** — earliest
+   * scheduled_for first, NULLs (unscheduled) last, then created_at / id
+   * as tie-breakers.
+   *
+   * Every caller that reasons about "what posts next" uses this:
+   *   - status route to pick the dashboard's `nextPost` card
+   *   - postScheduler to arm its timer
+   *   - queue route to assign 1-based queue positions
+   *
+   * For consumers that need the canonical *oldest-first by created_at*
+   * order (the input to category rotation), use `listPendingByCreatedAt`.
    */
   listPending(): PostQueueItem[] {
+    const db = getDb();
+    const rows = db
+      .prepare(
+        `SELECT * FROM post_queue
+         WHERE status = 'pending'
+         ORDER BY scheduled_for IS NULL ASC,
+                  scheduled_for ASC,
+                  created_at ASC,
+                  id ASC`,
+      )
+      .all() as unknown as QueueRow[];
+    return rows.map(rowToItem);
+  },
+
+  /**
+   * Oldest-first ordering by created_at / id. This is the canonical
+   * input order for category rotation: within each category bucket,
+   * items must be oldest-first so the rotation picks the oldest item
+   * from each category in turn. Do NOT use this for "what posts next".
+   */
+  listPendingByCreatedAt(): PostQueueItem[] {
     const db = getDb();
     const rows = db
       .prepare(

@@ -469,6 +469,30 @@ If `Auto-submit writer` is **off** (the safe default), the extension fills
 the X composer at each scheduled time and stops; you manually click *Post*
 in X. The queue item is marked `posted` once filling succeeds.
 
+#### Scheduling behavior
+
+- The **first upcoming post** is scheduled randomly between the
+  configured *min* and *max* post interval — never outside that range,
+  never compounded with previous timer values.
+- **Later queue items** are cumulative (each is scheduled at the previous
+  item's `scheduled_for + random(min, max)`), so the last item in a
+  large batch can legitimately be far in the future. The *Next post in*
+  card always shows the **earliest** unposted item, not the last.
+- **Manual *Post Next Item Now*** posts the item immediately, then
+  recomputes the remaining schedule from now — so the next post is
+  again `now + random(min, max)`, not the stale time from the previous
+  timeline.
+- `GET /api/status` is **read-only**: it never recalculates the
+  schedule, never updates `next_run_at`, and never mutates
+  `scheduled_for`. Schedule recomputation only happens on `start`,
+  settings interval changes, queue selection mode changes, manual post,
+  batch arrival, and recovery from a missing `scheduled_for`.
+- If the *Next post in* countdown ever shows a value outside the
+  configured interval, check the *Post schedule recalculated* log entry
+  for `firstDelaySeconds` and `generatedDelaysSeconds`. The scheduler
+  also self-heals when a generated first delay falls outside the
+  configured range and logs *Schedule bug detected*.
+
 ---
 
 ## Real website demo
@@ -566,6 +590,7 @@ DOM automation is rejected, not as a substitute for the real API.
 | Source URL fetch failed | Backend logs a warning (`Source fetch failed; falling back to prompt-only`) and continues generation without external context. Check the URL in your browser. |
 | Source URL was rejected | Localhost / private-network URLs are blocked to prevent SSRF. Use a public URL. |
 | Reader / Writer disconnected after some time, even though the extension is connected | See *Reader/Writer disconnected after some time* below. The extension now self-heals via a heartbeat and backend rediscovery; in most cases the dashboard recovers without refreshing the tab. |
+| *"Next post in"* shows a value outside the configured interval | The first upcoming post is always scheduled within `[minIntervalSeconds, maxIntervalSeconds]` from now. If the dashboard shows e.g. 29:56 with a 5–10 minute interval, check the *Post schedule recalculated* log entry — it logs the configured range and the first generated delay. The scheduler also self-heals if it detects a first delay outside range (look for *Schedule bug detected*). |
 
 ### Reader/Writer disconnected after some time
 
