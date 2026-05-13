@@ -137,7 +137,7 @@ function buildAutomationMessage(args: {
       if (!readerConnected) {
         return 'Queue is empty and the reader tab is disconnected. Generate batch will not work.';
       }
-      return 'Queue is empty. The next batch will be generated automatically.';
+      return 'Queue is empty. Generating next batch now.';
     }
     const cd = args.nextPostCountdownSeconds;
     if (cd != null) {
@@ -219,30 +219,43 @@ function buildBatchSchedulerStatus(args: {
   refillMode: BatchSchedulerStatus['refillMode'];
 }): BatchSchedulerStatus {
   const cd = args.isRunning ? countdownFromIso(args.nextBatchRunAt) : null;
+  // `nextBatchRunAt` is only set when a retry-after-failure timer is armed
+  // (the immediate-refill path runs synchronously without a future time).
+  const retryScheduled =
+    args.isRunning &&
+    !args.isGeneratingBatch &&
+    args.pendingCount === 0 &&
+    args.nextBatchRunAt != null;
 
   let state: SchedulerState;
   let message: string;
   if (args.isGeneratingBatch) {
     state = 'running';
-    message = 'Generating batch now.';
+    message = 'Generating next batch from Gemini…';
   } else if (!args.isRunning) {
     state = 'stopped';
-    message = 'Automation is stopped. Batch generation is paused.';
+    message =
+      args.pendingCount === 0
+        ? 'Queue is empty. Start automation to generate a batch.'
+        : 'Automation is stopped. Batch generation is paused.';
   } else if (args.pendingCount > 0) {
     state = 'idle';
-    message = `Queue has ${args.pendingCount} item${args.pendingCount === 1 ? '' : 's'}. Batch generation is waiting until the queue becomes empty.`;
+    message = `Queue has ${args.pendingCount} item${args.pendingCount === 1 ? '' : 's'}. Posting will continue.`;
+  } else if (retryScheduled) {
+    state = 'waiting-for-batch';
+    message =
+      cd != null
+        ? `Batch generation failed. Retrying in ${formatHms(cd)}.`
+        : 'Batch generation failed. Retry scheduled.';
   } else if (!args.readerConnected) {
     state = 'paused';
-    message = 'Reader tab is disconnected. Batch generation cannot run.';
-  } else if (args.refillMode === 'immediate') {
+    message =
+      'Reader tab is disconnected. Will generate next batch as soon as it reconnects.';
+  } else {
+    // Queue empty, running, reader connected, no retry pending — we are
+    // about to fire (or have just fired) immediate refill.
     state = 'running';
     message = 'Queue is empty. Generating next batch now.';
-  } else if (cd != null) {
-    state = 'waiting-for-batch';
-    message = `Queue is empty. Next batch will be generated in ${formatHms(cd)}.`;
-  } else {
-    state = 'waiting-for-batch';
-    message = 'Queue is empty. Scheduling next batch.';
   }
 
   return {

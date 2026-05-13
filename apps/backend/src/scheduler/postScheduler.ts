@@ -179,12 +179,16 @@ class PostScheduler {
     }
 
     if (queueService.countPendingOrScheduled() === 0) {
-      // Hand off to the batch scheduler. It decides immediate vs random
-      // delay and will re-arm the post timer once new items arrive
-      // (via onScheduleAffectingChange('new-batch-from-batch-scheduler')).
-      logService.info('Post scheduler tick: queue empty; handing off to batch scheduler.');
+      // Queue empty → ask the batch scheduler to refill immediately. It
+      // will fire `onScheduleAffectingChange('new-batch-from-batch-scheduler')`
+      // on success, which re-arms our timer.
+      logService.info(
+        'Post scheduler tick: queue empty; requesting immediate batch generation.',
+      );
       settingsService.setNextRunAt(null);
-      batchScheduler.onQueueEmpty('post-tick-queue-empty');
+      void batchScheduler.ensureQueueHasItemsOrGenerateImmediately(
+        'post-tick-queue-empty',
+      );
       return;
     }
 
@@ -210,13 +214,17 @@ class PostScheduler {
 
     if (settingsService.get().isRunning) {
       if (queueService.countPendingOrScheduled() === 0) {
-        logService.info('Last queue item posted; handing off to batch scheduler.');
+        logService.info(
+          'Queue empty after posting; generating next batch immediately.',
+        );
         settingsService.setNextRunAt(null);
         if (this.timer) {
           clearTimeout(this.timer);
           this.timer = null;
         }
-        batchScheduler.onQueueEmpty('queue-emptied-after-post');
+        void batchScheduler.ensureQueueHasItemsOrGenerateImmediately(
+          'queue-emptied-after-post',
+        );
       } else {
         this.armTimerForNextDue();
       }

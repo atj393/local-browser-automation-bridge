@@ -9,98 +9,144 @@ import { getRandomDelay } from './randomDelay.js';
 /**
  * Owns the timer that controls **when Gemini is asked for a new batch**.
  *
- * Lifecycle (when automation is running):
- *   - Queue has items  → batch scheduler is idle. The post scheduler runs.
- *   - Queue is empty   → onQueueEmpty() decides:
- *       refillMode === 'immediate'    → generateBatchNow() right away.
- *       refillMode === 'random_delay' → arm a setTimeout for
- *                                        now + random(batchMin, batchMax).
- *   - Generation succeeds → recompute the post schedule and let the post
- *                            scheduler resume; clear the batch timer.
- *   - Generation fails    → schedule another attempt using the same random
- *                            range (no immediate retry storm).
+ * Behavior contract (when automation is running):
+ *   - Queue has items  → batch scheduler is idle. Post scheduler runs.
+ *   - Queue is empty   → generate a batch IMMEDIATELY (no random delay).
+ *   - Generation fails → schedule a retry using the batch interval.
+ *   - Generation OK    → recompute post schedule via post scheduler hook.
+ *
+ * The batch interval (`batchMin/MaxIntervalSeconds`) is **only** used for
+ * retry-after-failure, not for the first refill when the queue empties.
  */
 class BatchScheduler {
-  private timer: NodeJS.Timeout | null = null;
+  private retryTimer: NodeJS.Timeout | null = null;
   private isGenerating = false;
+  /** True only when the *currently scheduled* batch timer is a retry. */
+  private retryPending = false;
 
   /** Initial assessment when automation starts. */
   start(): void {
     if (queueService.countPendingOrScheduled() === 0) {
-      this.onQueueEmpty('automation-started');
+      void this.ensureQueueHasItemsOrGenerateImmediately('automation-started');
     } else {
       logService.info(
         'Batch scheduler started; queue has items, batch generation is idle.',
         { pending: queueService.countPendingOrScheduled() },
       );
       settingsService.setNextBatchRunAt(null);
-      this.clearBatchTimer();
+      this.clearRetryTimer();
     }
   }
 
   stop(): void {
-    this.clearBatchTimer();
+    this.clearRetryTimer();
     settingsService.setNextBatchRunAt(null);
+    this.retryPending = false;
   }
 
-  clearBatchTimer(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-      logService.debug('Batch timer cleared.');
+  private clearRetryTimer(): void {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+      logService.debug('Batch retry timer cleared.');
     }
   }
 
   /**
-   * Called by the post scheduler (or at automation start) once the queue
-   * runs out.
+   * Single entry point for "queue went empty, get more posts".
+   *
+   * Behavior:
+   *  - Queue has items     → returns without generating.
+   *  - Already generating  → returns "already generating".
+   *  - Automation stopped  → no-op.
+   *  - Otherwise           → generate immediately.
+   *
+   * Called from automation start, post scheduler after the last item posts,
+   * and any retry timer firing.
    */
-  onQueueEmpty(reason: string): void {
+  async ensureQueueHasItemsOrGenerateImmediately(
+    reason: string,
+  ): Promise<{ inserted: number; skipped?: string; error?: string }> {
     const settings = settingsService.get();
     if (!settings.isRunning) {
-      logService.debug('Batch scheduler: automation stopped; not arming.');
-      return;
+      logService.debug('Batch refill skipped: automation stopped.', { reason });
+      return { inserted: 0, skipped: 'not-running' };
+    }
+    if (queueService.countPendingOrScheduled() > 0) {
+      this.clearRetryTimer();
+      settingsService.setNextBatchRunAt(null);
+      this.retryPending = false;
+      return { inserted: 0, skipped: 'queue-not-empty' };
     }
     if (this.isGenerating) {
-      logService.debug('Batch scheduler: generation already in progress; not arming.');
+      logService.info('Batch generation already in progress; skipping duplicate request.', {
+        reason,
+      });
+      return { inserted: 0, skipped: 'in-progress' };
+    }
+    return this.generateBatchImmediatelyBecauseQueueEmpty(reason);
+  }
+
+  /**
+   * Immediate-refill path: fires generation right now because the queue
+   * is empty. The retry timer (if any) is cleared so we don't double-fire.
+   */
+  private async generateBatchImmediatelyBecauseQueueEmpty(
+    reason: string,
+  ): Promise<{ inserted: number; skipped?: string; error?: string }> {
+    this.clearRetryTimer();
+    settingsService.setNextBatchRunAt(null);
+    this.retryPending = false;
+    logService.info('Queue empty; generating batch immediately.', { reason });
+    const result = await this.generateBatchNow(`immediate-refill:${reason}`);
+    return { inserted: result.inserted, skipped: result.skipped, error: result.error };
+  }
+
+  /**
+   * Failure retry path: schedule another generation attempt after a
+   * random delay drawn from `batchMin/MaxIntervalSeconds`. Used when an
+   * immediate refill fails (reader disconnected, Gemini error, JSON
+   * parse failure, etc.). Prevents a tight retry loop.
+   */
+  private scheduleBatchRetryAfterFailure(reason: string): void {
+    const settings = settingsService.get();
+    if (!settings.isRunning) {
+      logService.debug('Retry not scheduled: automation stopped.', { reason });
       return;
     }
-    logService.info('Queue empty; scheduling next batch.', {
-      reason,
-      mode: settings.batchRefillMode,
-    });
-
-    if (settings.batchRefillMode === 'immediate') {
-      this.clearBatchTimer();
-      // Fire on the next tick so the caller can finish whatever it was doing.
-      this.timer = setTimeout(() => {
-        this.timer = null;
-        void this.generateBatchNow('queue-empty-immediate');
-      }, 0);
-      return;
-    }
-
-    // Random delay mode (default).
     const delayMs = getRandomDelay(
       settings.batchMinIntervalSeconds,
       settings.batchMaxIntervalSeconds,
     );
     const nextRunAt = isoFromMsFromNow(delayMs);
     settingsService.setNextBatchRunAt(nextRunAt);
-    this.clearBatchTimer();
-    logService.info(
-      `Batch generation scheduled in ${Math.round(delayMs / 1000)}s.`,
-      { nextRunAt },
+    this.clearRetryTimer();
+    this.retryPending = true;
+    logService.warn(
+      `Batch generation retry scheduled in ${Math.round(delayMs / 1000)}s.`,
+      { nextRunAt, reason },
     );
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      void this.generateBatchNow('batch-timer-fired');
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.retryPending = false;
+      void this.ensureQueueHasItemsOrGenerateImmediately(`retry-timer:${reason}`);
     }, delayMs);
   }
 
   /**
+   * Optional top-up entry point. Currently a no-op placeholder — the
+   * product spec reserves the batch interval for future top-up behavior
+   * when the queue has content but might empty soon.
+   */
+  scheduleBatchTopUpIfNeeded(reason: string): void {
+    // Intentionally not implemented yet; documented entry point so the
+    // future top-up feature has an obvious place to land.
+    logService.debug('scheduleBatchTopUpIfNeeded called (no-op).', { reason });
+  }
+
+  /**
    * Force a generation right now. Used by the manual /api/batches/generate
-   * route, the immediate-refill path, and the timer firing.
+   * route, the immediate-refill path, and the retry timer firing.
    *
    * Always single-flight via isGenerating + DB flag. Never starts a second
    * generation while one is in progress.
@@ -113,7 +159,9 @@ class BatchScheduler {
     skipped?: 'in-progress' | 'reader-disconnected' | 'queue-not-empty';
   }> {
     if (this.isGenerating) {
-      logService.warn('Batch generation already in progress.', { reason });
+      logService.warn('Batch generation already running; skipping duplicate request.', {
+        reason,
+      });
       return {
         inserted: 0,
         batchId: '',
@@ -125,6 +173,11 @@ class BatchScheduler {
 
     if (!extensionGateway.hasReader()) {
       logService.warn('Batch generation skipped: reader disconnected.', { reason });
+      // Treat reader-disconnected as a failure and schedule a retry so the
+      // app recovers automatically once the reader reconnects.
+      if (settingsService.get().isRunning) {
+        this.scheduleBatchRetryAfterFailure('reader-disconnected');
+      }
       return {
         inserted: 0,
         batchId: '',
@@ -136,16 +189,17 @@ class BatchScheduler {
 
     this.isGenerating = true;
     settingsService.setBatchGenerationRunning(true);
+    // Immediate-refill mode: nextBatchRunAt is null while we generate.
     settingsService.setNextBatchRunAt(null);
+    this.retryPending = false;
     logService.info('Batch generation started.', { reason });
 
     try {
       const result = await promptService.generateAndStoreBatch();
       if (result.error) {
         logService.error('Batch generation failed.', { reason, error: result.error });
-        // Schedule another attempt later if automation is running.
         if (settingsService.get().isRunning) {
-          this.onQueueEmpty('batch-generation-failed-retry');
+          this.scheduleBatchRetryAfterFailure(`generation-failed:${reason}`);
         }
         return result;
       }
@@ -177,17 +231,17 @@ class BatchScheduler {
   }
 
   /**
-   * Called by settings.routes when the batch interval / mode changes while
-   * automation is running. Re-evaluates only if we are currently waiting
-   * (queue empty + timer armed).
+   * Called by settings.routes when the batch interval / mode changes
+   * while automation is running. The interval now only affects the
+   * retry-after-failure timer, so we only need to re-arm if we are
+   * currently waiting on a retry.
    */
   onSettingsChanged(): void {
     const settings = settingsService.get();
     if (!settings.isRunning) {
-      // Don't actively rearm while stopped, but clear stale next_batch_run_at
-      // so the dashboard doesn't show ghost countdowns from old values.
-      this.clearBatchTimer();
+      this.clearRetryTimer();
       settingsService.setNextBatchRunAt(null);
+      this.retryPending = false;
       logService.info('Batch interval settings changed; cleared stale next_batch_run_at.');
       return;
     }
@@ -196,19 +250,30 @@ class BatchScheduler {
       return;
     }
     if (queueService.countPendingOrScheduled() > 0) {
-      // Queue has items → batch scheduler is idle. Nothing to do; the new
-      // interval will apply the next time the queue empties.
-      this.clearBatchTimer();
+      // Queue has items → batch scheduler is idle.
+      this.clearRetryTimer();
       settingsService.setNextBatchRunAt(null);
+      this.retryPending = false;
       return;
     }
-    // Queue empty + running + not generating → re-arm with the new interval.
-    logService.info('Batch interval settings changed; batch schedule recalculated.');
-    this.onQueueEmpty('settings-changed');
+    if (this.retryPending) {
+      // Re-arm the retry with the new interval.
+      logService.info('Batch interval settings changed; rearming retry timer.');
+      this.scheduleBatchRetryAfterFailure('settings-changed');
+      return;
+    }
+    // Queue empty, not generating, no retry pending → try immediate again.
+    logService.info('Batch interval settings changed; attempting immediate refill.');
+    void this.ensureQueueHasItemsOrGenerateImmediately('settings-changed');
   }
 
   isLocked(): boolean {
     return this.isGenerating;
+  }
+
+  /** True when a retry-after-failure timer is currently armed. */
+  isRetryPending(): boolean {
+    return this.retryPending;
   }
 }
 

@@ -342,13 +342,22 @@ times are computed when you click *Start automation* again.
 
 There are now **two independent loops** running when automation is on:
 
-- **Posting interval** controls the spacing between individual X posts.
+- **Post interval** controls the spacing between individual X posts.
   Lives on the post scheduler. Each pending queue item gets a
   `scheduledFor` timestamp `previous + random(min, max)`.
-- **Batch interval** controls when Gemini is asked to create a *new
-  batch* — only after the queue becomes empty. Lives on the batch
-  scheduler. By default it waits `random(batchMin, batchMax)` before
-  calling Gemini.
+- **Batch interval** controls how long the app waits before *retrying*
+  Gemini after a failed generation (reader disconnected, Gemini error,
+  JSON parse failure, etc.). It is **not** used to delay refill when the
+  queue empties.
+
+**The rule is simple:**
+
+| Situation | What happens |
+|---|---|
+| Automation running, queue empty | Generate the next batch **immediately**. |
+| Generation succeeds | Recompute the category-aware post schedule, resume posting. |
+| Generation fails | Schedule a retry using the **batch interval**. Dashboard shows retry countdown. |
+| Queue has items | Continue posting using the **post interval**. Batch scheduler is idle. |
 
 Example flow:
 
@@ -356,26 +365,18 @@ Example flow:
 Settings:
   Posts per generation:  5
   Post interval:         1–4 minutes
-  Batch interval:        15–30 minutes
-  Refill mode:           Wait a random delay when queue is empty
+  Batch interval:        15–30 minutes  (used only for retry-after-failure)
 
-1. You click Generate next batch now → 5 items queued.
-2. Start automation.
-3. Posting fills the X composer every 1–4 minutes.
-4. After the 5th item posts, the queue is empty.
-5. Batch scheduler arms a timer for 15–30 minutes from now.
-6. Dashboard shows "Queue is empty. Next batch will be generated in 22:14."
-7. Timer fires → Gemini generates the next batch → posting resumes.
+1. You click Start automation with the queue empty.
+2. Backend immediately asks Gemini for a batch.
+3. 5 items land in the queue with category-aware scheduled_for times.
+4. Posting fills the X composer every 1–4 minutes.
+5. After the 5th item posts, the queue is empty.
+6. Backend immediately asks Gemini for the next batch (no delay).
+7. If Gemini is unreachable, the dashboard says
+   "Batch generation failed. Retrying in 22:14."
+   When the retry fires, it goes back to step 6.
 ```
-
-**Refill modes**
-
-- *Wait a random delay when queue is empty* (default) — the safe behavior:
-  the app waits a random delay (within the batch interval) before asking
-  Gemini for a new batch.
-- *Generate immediately when queue is empty* — calls Gemini as soon as
-  the queue empties. Useful for tight demos; not recommended for
-  long-running automation.
 
 **Manual override**
 
@@ -383,7 +384,8 @@ The *Generate next batch now* button always bypasses the batch timer
 (but it still respects the in-memory single-flight lock and refuses if
 the reader is disconnected). When the queue already has items, this
 button still queues an additional batch on top — your post schedule is
-preserved.
+preserved. A duplicate click while a generation is in flight returns
+`Batch generation already in progress.`
 
 **Backend restart behavior**
 

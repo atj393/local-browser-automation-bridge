@@ -3,9 +3,11 @@ import type { StatusResponse } from '../api/types.js';
 import { formatCountdown, formatScheduledTime, liveCountdownSeconds } from '../utils/countdown.js';
 import { Badge } from './Badge.js';
 
+// Queue-empty refill is always immediate now. This setting only controls
+// retry-after-failure behavior, so labels reflect that.
 const REFILL_LABEL: Record<string, string> = {
-  immediate: 'Immediate when queue is empty',
-  random_delay: 'Random delay when queue is empty',
+  immediate: 'Immediate refill (retry on failure uses batch interval)',
+  random_delay: 'Immediate refill (retry on failure uses batch interval)',
 };
 
 function batchBadge(s: StatusResponse | null) {

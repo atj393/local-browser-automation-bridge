@@ -717,14 +717,16 @@ function BatchIntervalControls({
             applyChange(minValue, minUnit, maxValue, maxUnit, e.target.value as BatchRefillMode)
           }
           style={{ padding: '8px 10px', width: '100%' }}
+          disabled
+          title="Queue-empty refill is always immediate. This setting is kept for future use."
         >
           <option value="random_delay">Wait a random delay when queue is empty</option>
           <option value="immediate">Generate immediately when queue is empty</option>
         </select>
         <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-          {refillMode === 'random_delay'
-            ? 'Default. After the last item is posted, the app waits a random delay (within the batch interval) before asking Gemini for a new batch.'
-            : 'Aggressive. Calls Gemini as soon as the queue empties — useful for tight demos, not recommended for long-running automation.'}
+          Queue-empty refill is now <strong>always immediate</strong>. The batch
+          interval above is used only for <em>retry-after-failure</em> delays
+          (e.g., reader disconnected, Gemini error).
         </div>
       </div>
 
