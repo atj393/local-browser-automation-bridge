@@ -94,6 +94,12 @@ export interface AutomationSettings {
   queueSelectionMode: QueueSelectionMode;
   lastPostedCategoryId: number | null;
   lastSourceId: number | null;
+  /**
+   * How long the extension waits for Gemini's response before declaring
+   * a timeout. Bump this when using Gemini's "thinking" mode, which can
+   * take a minute or more before the final answer streams in.
+   */
+  geminiResponseTimeoutSeconds: number;
   nextRunAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -114,6 +120,7 @@ export interface UpdateSettingsBody {
   batchMaxIntervalSeconds: number;
   batchRefillMode: BatchRefillMode;
   queueSelectionMode: QueueSelectionMode;
+  geminiResponseTimeoutSeconds: number;
 }
 
 export interface PostQueueItem {

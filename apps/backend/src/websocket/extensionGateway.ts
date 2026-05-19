@@ -16,6 +16,7 @@ import type {
 import { CONTENT_READY_TTL_MS, TIMEOUTS, WS_PATH } from '@lbab/shared';
 import { requestRegistry } from './requestRegistry.js';
 import { logService } from '../services/logService.js';
+import { settingsService } from '../services/settingsService.js';
 import { newRequestId } from '../utils/ids.js';
 
 interface TabState {
@@ -289,12 +290,30 @@ class ExtensionGateway {
       }
     }
     const requestId = newRequestId();
+    // User-configurable wait window for Gemini's response. Falls back to
+    // the static TIMEOUTS constant if the setting is missing. Backend
+    // timer gets a 10% safety margin over the content-script timer so
+    // the content script always loses the race cleanly with a useful
+    // error rather than the backend reporting a vague socket timeout.
+    const settings = settingsService.get();
+    const waitTimeoutMs = Math.max(
+      30_000,
+      (settings.geminiResponseTimeoutSeconds || 300) * 1000,
+    );
+    const backendTimeoutMs = Math.max(
+      TIMEOUTS.generateBatchMs,
+      Math.round(waitTimeoutMs * 1.1),
+    );
     const promise = requestRegistry.create<GenerateNextBatchResultPayload>(
       requestId,
-      TIMEOUTS.generateBatchMs,
+      backendTimeoutMs,
       'Timed out waiting for Gemini response.',
     );
-    this.send({ type: 'GENERATE_NEXT_BATCH', requestId, payload });
+    this.send({
+      type: 'GENERATE_NEXT_BATCH',
+      requestId,
+      payload: { ...payload, waitTimeoutMs },
+    });
     return promise;
   }
 

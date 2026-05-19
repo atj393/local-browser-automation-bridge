@@ -9,14 +9,22 @@
     "dev:backend": "pnpm --filter @lbab/backend run dev",
     "dev:dashboard": "pnpm --filter @lbab/dashboard run dev",
     "dev:extension": "pnpm --filter @lbab/extension run dev",
+    "dev:dedicated": "cross-env PORT=14000 LBAB_BACKEND_PORT=14000 LBAB_DASHBOARD_PORT=14173 LBAB_EXTENSION_PORT=14174 VITE_BACKEND_WS_URL=ws://localhost:14000/ws pnpm -r --parallel --filter \"./apps/*\" run dev",
+    "dev:dedicated:backend": "cross-env PORT=14000 pnpm --filter @lbab/backend run dev",
+    "dev:dedicated:dashboard": "cross-env LBAB_BACKEND_PORT=14000 LBAB_DASHBOARD_PORT=14173 pnpm --filter @lbab/dashboard run dev",
+    "dev:dedicated:extension": "cross-env LBAB_EXTENSION_PORT=14174 VITE_BACKEND_WS_URL=ws://localhost:14000/ws pnpm --filter @lbab/extension run dev",
     "build": "pnpm -r run build",
     "build:backend": "pnpm --filter @lbab/backend run build",
     "build:dashboard": "pnpm --filter @lbab/dashboard run build",
     "build:extension": "pnpm --filter @lbab/extension run build",
+    "build:dedicated:extension": "cross-env VITE_BACKEND_WS_URL=ws://localhost:14000/ws pnpm --filter @lbab/extension run build",
     "typecheck": "pnpm -r run typecheck"
   },
   "engines": {
     "node": ">=22.5.0"
   },
-  "packageManager": "pnpm@9.0.0"
+  "packageManager": "pnpm@9.0.0",
+  "devDependencies": {
+    "cross-env": "^10.1.0"
+  }
 }

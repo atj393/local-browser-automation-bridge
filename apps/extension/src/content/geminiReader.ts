@@ -81,8 +81,12 @@ if ((window as unknown as Record<string, boolean>)[READER_INIT_FLAG]) {
     console.log('[lbab/gemini-reader] message received', message?.type, location.href);
 
     if (message?.type === 'GENERATE_NEXT_BATCH_CONTENT') {
-      const { prompt } = message.payload as { prompt: string; batchSize: number };
-      void handleGenerate(prompt)
+      const { prompt, waitTimeoutMs } = message.payload as {
+        prompt: string;
+        batchSize: number;
+        waitTimeoutMs?: number;
+      };
+      void handleGenerate(prompt, waitTimeoutMs)
         .then((result) => sendResponse(result))
         .catch((err) =>
           sendResponse({
@@ -132,7 +136,10 @@ if ((window as unknown as Record<string, boolean>)[READER_INIT_FLAG]) {
   }
 }
 
-async function handleGenerate(prompt: string): Promise<{
+async function handleGenerate(
+  prompt: string,
+  waitTimeoutMs?: number,
+): Promise<{
   success: boolean;
   rawText?: string;
   url?: string;
@@ -192,13 +199,24 @@ async function handleGenerate(prompt: string): Promise<{
 
   (sendBtn as HTMLButtonElement).click();
 
+  // Wait window: prefer the backend-supplied value (so the user's
+  // "Gemini response wait" setting takes effect). Fall back to 5 min.
+  // Stable window scales with the wait so a longer thinking-mode pause
+  // is not mistaken for the final answer, capped between 2s and 8s.
+  const effectiveTimeoutMs = Math.max(30_000, Math.floor(waitTimeoutMs ?? 300_000));
+  const stableMs = Math.max(2_000, Math.min(8_000, Math.floor(effectiveTimeoutMs / 30)));
+  console.log(
+    '[lbab/gemini-reader] waiting for response',
+    `timeoutMs=${effectiveTimeoutMs} stableMs=${stableMs}`,
+  );
+
   // Poll for response text.
   try {
     const result = await waitForStableText({
       ignoreInitial: initialResponseText,
       pollIntervalMs: 500,
-      stableMs: 2000,
-      timeoutMs: 120_000,
+      stableMs,
+      timeoutMs: effectiveTimeoutMs,
       getCandidate: () => {
         // Try specific selectors first (latest visible match per selector).
         for (const sel of specificSelectors) {

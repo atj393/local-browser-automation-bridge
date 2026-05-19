@@ -41,6 +41,7 @@ const updateSchema = z
     batchMaxIntervalSeconds: z.number().int().min(10).max(86_400),
     batchRefillMode: z.enum(BATCH_REFILL_MODES),
     queueSelectionMode: z.enum(QUEUE_SELECTION_MODES),
+    geminiResponseTimeoutSeconds: z.number().int().min(30).max(1800),
   })
   .refine((d) => d.maxIntervalSeconds >= d.minIntervalSeconds, {
     message: 'maxIntervalSeconds must be greater than or equal to minIntervalSeconds',

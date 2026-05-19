@@ -99,7 +99,7 @@ ${PERSONAL_PROFILE_RULES}`;
   return body;
 }
 
-interface CleanedItem {
+export interface CleanedItem {
   content: string;
   raw: unknown;
 }
@@ -115,6 +115,43 @@ function cleanItemContent(raw: string): string {
   // Collapse internal runs of whitespace.
   s = s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
   return s.trim();
+}
+
+/**
+ * Trim, dedupe, and length-cap a list of Gemini-extracted items.
+ * Returns at most `maxItems`. Used by both the auto-generate path
+ * (promptService.generateAndStoreBatch) and the manual-paste path
+ * (POST /api/batches/ingest-raw) so the queue is fed by exactly one
+ * cleaning rule set.
+ */
+export function cleanItems(
+  items: { content: string; raw: unknown }[],
+  maxItems: number,
+): { cleaned: CleanedItem[]; trimmedCount: number; droppedCount: number } {
+  const seen = new Set<string>();
+  const cleaned: CleanedItem[] = [];
+  let trimmedCount = 0;
+  let droppedCount = 0;
+  for (const item of items) {
+    const content = cleanItemContent(item.content);
+    if (!content) {
+      droppedCount++;
+      continue;
+    }
+    if (seen.has(content.toLowerCase())) {
+      droppedCount++;
+      continue;
+    }
+    let final = content;
+    if (final.length > MAX_CONTENT_LENGTH) {
+      final = final.slice(0, MAX_CONTENT_LENGTH).trimEnd();
+      trimmedCount++;
+    }
+    seen.add(final.toLowerCase());
+    cleaned.push({ content: final, raw: item.raw });
+    if (cleaned.length >= maxItems) break;
+  }
+  return { cleaned, trimmedCount, droppedCount };
 }
 
 export const promptService = {
@@ -185,30 +222,12 @@ export const promptService = {
       itemCount: extracted.items.length,
     });
 
-    // Per-item validation: trim, dedupe, length cap.
-    const seen = new Set<string>();
-    const cleaned: CleanedItem[] = [];
-    let trimmedCount = 0;
-    let droppedCount = 0;
-    for (const item of extracted.items) {
-      const content = cleanItemContent(item.content);
-      if (!content) {
-        droppedCount++;
-        continue;
-      }
-      if (seen.has(content.toLowerCase())) {
-        droppedCount++;
-        continue;
-      }
-      let final = content;
-      if (final.length > MAX_CONTENT_LENGTH) {
-        final = final.slice(0, MAX_CONTENT_LENGTH).trimEnd();
-        trimmedCount++;
-      }
-      seen.add(final.toLowerCase());
-      cleaned.push({ content: final, raw: item.raw });
-      if (cleaned.length >= postsPerGeneration) break;
-    }
+    // Per-item validation: trim, dedupe, length cap. Shared with the
+    // manual-paste ingest route so both paths produce byte-identical rows.
+    const { cleaned, trimmedCount, droppedCount } = cleanItems(
+      extracted.items,
+      postsPerGeneration,
+    );
 
     if (cleaned.length === 0) {
       const msg = `No valid posts after cleaning (${extracted.items.length} returned).`;

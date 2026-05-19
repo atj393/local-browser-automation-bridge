@@ -147,6 +147,11 @@ export function runMigrations(): void {
     'last_posted_category_id',
     'last_posted_category_id INTEGER',
   );
+  ensureColumn(
+    'automation_settings',
+    'gemini_response_timeout_seconds',
+    'gemini_response_timeout_seconds INTEGER NOT NULL DEFAULT 300',
+  );
 
   // ---- post_queue columns ----
   ensureColumn('post_queue', 'source_url', 'source_url TEXT');

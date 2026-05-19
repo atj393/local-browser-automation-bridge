@@ -15,6 +15,7 @@ import { sourcesRouter } from './routes/sources.routes.js';
 import { categoriesRouter } from './routes/categories.routes.js';
 import { contentSourcesRouter } from './routes/contentSources.routes.js';
 import { personalProfileRouter } from './routes/personalProfile.routes.js';
+import { ingestRawRouter } from './routes/ingestRaw.routes.js';
 import { testPagesRouter } from './routes/testPages.routes.js';
 
 export function createApp() {
@@ -35,6 +36,7 @@ export function createApp() {
   app.use(categoriesRouter);
   app.use(contentSourcesRouter);
   app.use(personalProfileRouter);
+  app.use(ingestRawRouter);
   app.use(testPagesRouter);
 
   app.get('/', (_req, res) => {

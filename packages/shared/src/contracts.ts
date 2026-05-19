@@ -61,6 +61,12 @@ export interface RediscoverTabsPayload {
 export interface GenerateNextBatchPayload {
   prompt: string;
   batchSize: number;
+  /**
+   * Maximum ms the content script should wait for Gemini's final answer
+   * before giving up. Optional for back-compat with older backends; the
+   * content script falls back to a sane default when missing.
+   */
+  waitTimeoutMs?: number;
 }
 
 export interface GenerateNextBatchResultPayload {

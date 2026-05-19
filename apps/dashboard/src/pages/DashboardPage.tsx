@@ -7,6 +7,7 @@ import { ConnectionChecklist } from '../components/ConnectionChecklist.js';
 import { GenerationInfoPanel } from '../components/GenerationInfoPanel.js';
 import { PostingTimelinePanel } from '../components/PostingTimelinePanel.js';
 import { BatchTimelinePanel } from '../components/BatchTimelinePanel.js';
+import { PasteResponseCard } from '../components/PasteResponseCard.js';
 
 export function DashboardPage() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -38,6 +39,7 @@ export function DashboardPage() {
       <PostingTimelinePanel status={status} />
       <BatchTimelinePanel status={status} />
       <ControlPanel status={status} onAfterAction={refresh} />
+      <PasteResponseCard />
       <GenerationInfoPanel settings={settings} />
       <StatusCards status={status} />
       {status?.lastLog && (

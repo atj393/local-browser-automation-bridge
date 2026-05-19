@@ -116,6 +116,16 @@ export const api = {
   deleteContentSource: (id: number) =>
     request<{ ok: boolean }>('DELETE', `/api/content-sources/${id}`),
 
+  // Manual paste: ingest a raw Gemini response into the queue.
+  ingestRawBatch: (body: { rawText: string; categoryId: number | null }) =>
+    request<{
+      ok: boolean;
+      inserted: number;
+      batchId: string;
+      trimmedCount: number;
+      droppedCount: number;
+    }>('POST', '/api/batches/ingest-raw', body),
+
   // Personal profile
   getPersonalProfile: () =>
     request<PersonalProfileResponse>('GET', '/api/personal-profile'),

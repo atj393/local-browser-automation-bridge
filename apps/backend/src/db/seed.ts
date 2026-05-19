@@ -14,11 +14,13 @@ export function seedDefaultSettings(): void {
        source_urls, source_mode, last_source_index, last_source_url,
        batch_min_interval_seconds, batch_max_interval_seconds, batch_refill_mode,
        next_batch_run_at, last_batch_generated_at, is_batch_generation_running,
+       gemini_response_timeout_seconds,
        next_run_at, created_at, updated_at)
      VALUES (1, 0, ?, 10, 10, 60, 240, 0, 'https://x.com/*', 'https://gemini.google.com/*',
              '', 'rotate', -1, NULL,
              900, 1800, 'random_delay',
              NULL, NULL, 0,
+             300,
              NULL, ?, ?)`,
   ).run(DEFAULT_LLM_PROMPT, now, now);
 }

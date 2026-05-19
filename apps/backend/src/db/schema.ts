@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS automation_settings (
   is_batch_generation_running INTEGER NOT NULL DEFAULT 0,
   queue_selection_mode TEXT NOT NULL DEFAULT 'rotate_categories',
   last_posted_category_id INTEGER,
+  gemini_response_timeout_seconds INTEGER NOT NULL DEFAULT 300,
   next_run_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

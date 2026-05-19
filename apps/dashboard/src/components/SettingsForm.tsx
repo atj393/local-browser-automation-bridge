@@ -52,6 +52,7 @@ function fromSettings(s: AutomationSettings): FormState {
     batchMaxIntervalSeconds: s.batchMaxIntervalSeconds,
     batchRefillMode: s.batchRefillMode,
     queueSelectionMode: s.queueSelectionMode,
+    geminiResponseTimeoutSeconds: s.geminiResponseTimeoutSeconds,
   };
 }
 
@@ -104,6 +105,7 @@ export function SettingsForm({ initial, onSave }: Props) {
         batchMaxIntervalSeconds: form.batchMaxIntervalSeconds,
         batchRefillMode: form.batchRefillMode,
         queueSelectionMode: form.queueSelectionMode,
+        geminiResponseTimeoutSeconds: form.geminiResponseTimeoutSeconds,
       });
       setSavedAt(new Date().toLocaleTimeString());
     } catch (err) {
@@ -160,6 +162,13 @@ export function SettingsForm({ initial, onSave }: Props) {
         maxSeconds={form.maxIntervalSeconds}
         onChange={(min, max) =>
           setForm((f) => ({ ...f, minIntervalSeconds: min, maxIntervalSeconds: max }))
+        }
+      />
+
+      <GeminiResponseWaitControl
+        seconds={form.geminiResponseTimeoutSeconds}
+        onChange={(seconds) =>
+          setForm((f) => ({ ...f, geminiResponseTimeoutSeconds: seconds }))
         }
       />
 
@@ -737,6 +746,92 @@ function BatchIntervalControls({
       {tooLong && <WarningBox>Maximum batch interval cannot exceed 24 hours.</WarningBox>}
       {/* Touch BATCH_REFILL_MODES to silence "imported but unused" if future code drops the enum reference. */}
       <span style={{ display: 'none' }}>{BATCH_REFILL_MODES.length}</span>
+    </div>
+  );
+}
+
+interface GeminiResponseWaitControlProps {
+  seconds: number;
+  onChange: (seconds: number) => void;
+}
+
+/**
+ * How long the extension waits for Gemini to finish answering. Bump
+ * this when using Gemini's "thinking" mode (reasoning panel), which
+ * can take a minute or more before the final answer streams in.
+ *
+ * Allowed range: 30 seconds – 30 minutes. Default 5 minutes.
+ */
+function GeminiResponseWaitControl({ seconds, onChange }: GeminiResponseWaitControlProps) {
+  const best = secondsToBestInterval(seconds);
+  const [value, setValue] = useState<number>(best.value);
+  const [unit, setUnit] = useState<IntervalUnit>(best.unit);
+
+  useEffect(() => {
+    const b = secondsToBestInterval(seconds);
+    setValue(b.value);
+    setUnit(b.unit);
+  }, [seconds]);
+
+  function apply(nextValue: number, nextUnit: IntervalUnit) {
+    setValue(nextValue);
+    setUnit(nextUnit);
+    onChange(intervalToSeconds(nextValue, nextUnit));
+  }
+
+  const tooShort = seconds < 30;
+  const tooLong = seconds > 1800;
+
+  return (
+    <div
+      className="field"
+      style={{
+        background: '#f7f8fc',
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: 12,
+      }}
+    >
+      <h2 className="h2" style={{ fontSize: '1rem', marginTop: 0, marginBottom: 4 }}>
+        Gemini response wait
+      </h2>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+        How long to wait for Gemini's response before giving up. Bump this when
+        using Gemini's <em>thinking / show reasoning</em> mode — those answers
+        can take a minute or more. Current wait: <strong>{formatDurationHuman(seconds)}</strong>.
+      </div>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <input
+          type="number"
+          min={1}
+          value={value}
+          onChange={(e) => apply(Number(e.target.value) || 0, unit)}
+          style={{ width: 120 }}
+        />
+        <select
+          value={unit}
+          onChange={(e) => apply(value, e.target.value as IntervalUnit)}
+          style={{ padding: '8px 10px' }}
+        >
+          <option value="seconds">seconds</option>
+          <option value="minutes">minutes</option>
+          <option value="hours">hours</option>
+        </select>
+        <button
+          type="button"
+          className="btn secondary"
+          onClick={() => apply(5, 'minutes')}
+          style={{ fontSize: 12, padding: '6px 10px' }}
+        >
+          Reset to default (5 minutes)
+        </button>
+      </div>
+      {tooShort && (
+        <WarningBox>Gemini response wait must be at least 30 seconds.</WarningBox>
+      )}
+      {tooLong && (
+        <WarningBox>Gemini response wait cannot exceed 30 minutes.</WarningBox>
+      )}
     </div>
   );
 }

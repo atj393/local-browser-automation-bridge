@@ -109,6 +109,42 @@ pnpm dev:dashboard    # http://localhost:5173
 pnpm dev:extension    # builds to apps/extension/dist (watch mode)
 ```
 
+### Dedicated-port mode (run alongside another local project)
+
+Need to keep this stable instance running while another project hogs the
+usual ports? A parallel set of scripts boots the whole stack on
+non-conflicting ports:
+
+| Service | Default | Dedicated |
+|---|---|---|
+| Backend HTTP + WS | 4000 | 14000 |
+| Dashboard (Vite) | 5173 | 14173 |
+| Extension dev server | 5174 | 14174 |
+
+```bash
+pnpm dev:dedicated              # all three on 14000 / 14173 / 14174
+pnpm dev:dedicated:backend      # just backend on 14000
+pnpm dev:dedicated:dashboard    # just dashboard on 14173 (proxies to 14000)
+pnpm dev:dedicated:extension    # just extension dev server on 14174
+                                # with VITE_BACKEND_WS_URL=ws://localhost:14000/ws
+pnpm build:dedicated:extension  # production build that points at port 14000
+```
+
+The defaults are env-var driven, so you can override any of them:
+
+```bash
+LBAB_BACKEND_PORT=15000 LBAB_DASHBOARD_PORT=15173 \
+  VITE_BACKEND_WS_URL=ws://localhost:15000/ws pnpm dev
+```
+
+> **One-time extension reload**: the extension bakes its WebSocket URL at
+> build time. After switching between default and dedicated modes, run
+> the appropriate `dev:*:extension` (or `build:*:extension`) once and
+> click the reload icon for the extension at `chrome://extensions` so
+> the service worker picks up the new URL. The default `dev` command
+> continues to use port 4000 as before — nothing about the regular flow
+> changed.
+
 ## Load the Chrome extension
 
 1. Open `chrome://extensions` in Chrome.

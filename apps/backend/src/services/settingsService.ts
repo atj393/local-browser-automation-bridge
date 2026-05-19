@@ -37,6 +37,7 @@ interface SettingsRow {
   is_batch_generation_running: number;
   queue_selection_mode: string;
   last_posted_category_id: number | null;
+  gemini_response_timeout_seconds: number;
   next_run_at: string | null;
   created_at: string;
   updated_at: string;
@@ -96,6 +97,11 @@ function rowToSettings(row: SettingsRow): AutomationSettings {
     queueSelectionMode: asQueueSelectionMode(row.queue_selection_mode),
     lastPostedCategoryId: row.last_posted_category_id,
     lastSourceId: row.last_source_id,
+    geminiResponseTimeoutSeconds:
+      typeof row.gemini_response_timeout_seconds === 'number' &&
+      row.gemini_response_timeout_seconds > 0
+        ? row.gemini_response_timeout_seconds
+        : 300,
     nextRunAt: row.next_run_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -121,6 +127,7 @@ export const settingsService = {
            source_urls = ?, source_mode = ?,
            batch_min_interval_seconds = ?, batch_max_interval_seconds = ?, batch_refill_mode = ?,
            queue_selection_mode = ?,
+           gemini_response_timeout_seconds = ?,
            updated_at = ?
        WHERE id = 1`,
     ).run(
@@ -138,6 +145,7 @@ export const settingsService = {
       body.batchMaxIntervalSeconds,
       body.batchRefillMode,
       body.queueSelectionMode,
+      body.geminiResponseTimeoutSeconds,
       nowIso(),
     );
     return this.get();
