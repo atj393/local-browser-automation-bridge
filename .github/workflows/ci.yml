@@ -24,10 +24,11 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      # Do not pin a pnpm version here: it is read from the "packageManager"
+      # field in package.json (pnpm@9.0.0). Specifying both makes
+      # pnpm/action-setup fail with ERR_PNPM_BAD_PM_VERSION.
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       # node:sqlite requires Node >= 22.5 (see engines in package.json).
       - name: Set up Node
