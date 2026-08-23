@@ -7,6 +7,10 @@ import { logService } from './logService.js';
 import { settingsService } from './settingsService.js';
 import { contentSourceService } from './contentSourceService.js';
 import { extractFromHtml, type ExtractionMethod, cleanExtractedText } from './htmlExtractor.js';
+import { isAllowedSourceUrl } from './urlGuard.js';
+
+// Re-exported so existing callers (and sourceService.isAllowedSourceUrl) keep working.
+export { isAllowedSourceUrl };
 
 export interface SourceContext {
   sourceId: number | null;
@@ -25,32 +29,6 @@ export interface SourceContext {
   categorySlug: string | null;
 }
 
-const PRIVATE_HOSTNAMES = new Set(['localhost', '0.0.0.0', '::1', '[::1]']);
-const PRIVATE_IP_PREFIXES = [/^127\./, /^10\./, /^192\.168\./];
-const PRIVATE_172_RE = /^172\.(1[6-9]|2\d|3[01])\./;
-
-export function isAllowedSourceUrl(raw: string): { ok: boolean; reason?: string } {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return { ok: false, reason: 'Invalid URL' };
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    return { ok: false, reason: `Protocol ${url.protocol} not allowed` };
-  }
-  const host = url.hostname.toLowerCase();
-  if (PRIVATE_HOSTNAMES.has(host)) {
-    return { ok: false, reason: `Hostname ${host} is private` };
-  }
-  if (PRIVATE_IP_PREFIXES.some((re) => re.test(host)) || PRIVATE_172_RE.test(host)) {
-    return { ok: false, reason: `IP ${host} is in a private range` };
-  }
-  if (host.startsWith('[fe80') || host === '[::]') {
-    return { ok: false, reason: `IPv6 ${host} is private` };
-  }
-  return { ok: true };
-}
 
 const REQUEST_HEADERS = {
   'User-Agent':

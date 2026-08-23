@@ -4,7 +4,7 @@ interface PendingEntry {
   timer: NodeJS.Timeout;
 }
 
-class RequestRegistry {
+export class RequestRegistry {
   private pending = new Map<string, PendingEntry>();
 
   create<T = unknown>(requestId: string, timeoutMs: number, errorMessage: string): Promise<T> {

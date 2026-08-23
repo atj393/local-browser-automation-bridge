@@ -18,13 +18,16 @@
     "build:dashboard": "pnpm --filter @lbab/dashboard run build",
     "build:extension": "pnpm --filter @lbab/extension run build",
     "build:dedicated:extension": "cross-env VITE_BACKEND_WS_URL=ws://localhost:14000/ws pnpm --filter @lbab/extension run build",
-    "typecheck": "pnpm -r run typecheck"
+    "typecheck": "pnpm -r run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "engines": {
     "node": ">=22.5.0"
   },
   "packageManager": "pnpm@9.0.0",
   "devDependencies": {
-    "cross-env": "^10.1.0"
+    "cross-env": "^10.1.0",
+    "vitest": "^2.1.9"
   }
 }
